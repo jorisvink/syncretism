@@ -26,7 +26,6 @@
 #include <time.h>
 
 #include "syncretism.h"
-#include "libnyfe.h"
 
 static int	server_send_random(struct conn *);
 static int	server_recv_random(struct conn *);
@@ -200,7 +199,8 @@ server_perform_handshake(struct conn *c)
 	if (server_send_random(c) == -1)
 		return (-1);
 
-	if (syncretism_derive_keys(c, &c->rx, &c->tx) == -1)
+	if (syncretism_derive_keys(c, &c->rx, &c->tx,
+	    &c->rx_encap, &c->tx_encap) == -1)
 		return (-1);
 
 	if (server_client_auth(c) == -1)

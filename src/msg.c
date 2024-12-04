@@ -21,7 +21,6 @@
 #include <unistd.h>
 
 #include "syncretism.h"
-#include "libnyfe.h"
 
 /*
  * Authenticate and encrypt the given data under the tx key.
@@ -32,8 +31,8 @@ syncretism_msg_pack(struct conn *c, const void *data, size_t len)
 	struct msg		*msg;
 	struct nyfe_agelas	cipher;
 	u_int64_t		nonce;
-	u_int32_t		length;
 	u_int8_t		block[136];
+	u_int32_t		length, pktlen;
 
 	PRECOND(data != NULL);
 	PRECOND(len < SYNCRETISM_MAX_MSG_LEN);
@@ -44,10 +43,13 @@ syncretism_msg_pack(struct conn *c, const void *data, size_t len)
 	length = htobe32(len);
 	nonce = htobe64(c->tx.nonce);
 
-	msg->length = len + SYNCRETISM_TAG_LEN;
+	msg->length = sizeof(length) + len + SYNCRETISM_TAG_LEN;
 
 	if ((msg->data = calloc(1, msg->length)) == NULL)
 		fatal("calloc: failed to allocate msg data");
+
+	pktlen = htobe32(len + SYNCRETISM_TAG_LEN);
+	nyfe_agelas_encrypt(&c->tx_encap, &pktlen, msg->data, sizeof(pktlen));
 
 	nyfe_mem_zero(block, sizeof(block));
 	nyfe_zeroize_register(&cipher, sizeof(cipher));
@@ -57,12 +59,15 @@ syncretism_msg_pack(struct conn *c, const void *data, size_t len)
 	nyfe_agelas_aad(&cipher, &length, sizeof(length));
 
 	nyfe_memcpy(block, &nonce, sizeof(nonce));
-
 	nyfe_agelas_encrypt(&cipher, block, block, sizeof(block));
-	if (len > 0)
-		nyfe_agelas_encrypt(&cipher, data, msg->data, len);
-	nyfe_agelas_authenticate(&cipher, &msg->data[len], SYNCRETISM_TAG_LEN);
 
+	if (len > 0) {
+		nyfe_agelas_encrypt(&cipher,
+		    data, &msg->data[sizeof(length)], len);
+	}
+
+	nyfe_agelas_authenticate(&cipher,
+	    &msg->data[sizeof(length) + len], SYNCRETISM_TAG_LEN);
 	nyfe_zeroize(&cipher, sizeof(cipher));
 
 	c->tx.nonce++;
@@ -109,8 +114,10 @@ syncretism_msg_unpack(struct conn *c, struct msg *msg)
 
 	nyfe_zeroize(&cipher, sizeof(cipher));
 
-	if (nyfe_mem_cmp(tag, calc, sizeof(calc)))
+	if (nyfe_mem_cmp(tag, calc, sizeof(calc))) {
+		printf("tag fail\n");
 		return (-1);
+	}
 
 	c->rx.nonce++;
 
@@ -139,7 +146,6 @@ syncretism_msg_free(struct msg *msg)
 int
 syncretism_msg_send(struct conn *c, const void *buf, size_t buflen)
 {
-	u_int32_t	len;
 	struct msg	*msg;
 
 	PRECOND(c != NULL);
@@ -147,10 +153,8 @@ syncretism_msg_send(struct conn *c, const void *buf, size_t buflen)
 	PRECOND(buflen < SYNCRETISM_MAX_MSG_LEN);
 
 	msg = syncretism_msg_pack(c, buf, buflen);
-	len = htobe32(msg->length);
 
-	if (syncretism_write(c->fd, &len, sizeof(len)) == -1 ||
-	    syncretism_write(c->fd, msg->data, msg->length) == -1) {
+	if (syncretism_write(c->fd, msg->data, msg->length) == -1) {
 		syncretism_msg_free(msg);
 		return (-1);
 	}
@@ -175,7 +179,10 @@ syncretism_msg_read(struct conn *c)
 	if (syncretism_read(c->fd, &len, sizeof(len)) == -1)
 		return (NULL);
 
+	nyfe_agelas_decrypt(&c->rx_encap, &len, &len, sizeof(len));
+
 	len = be32toh(len);
+	printf("length is %u\n", len);
 	if (len < SYNCRETISM_TAG_LEN || len > SYNCRETISM_MAX_MSG_LEN) {
 		syncretism_log(LOG_NOTICE, "received weird length (%u)", len);
 		return (NULL);

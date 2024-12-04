@@ -23,7 +23,6 @@
 #include <unistd.h>
 
 #include "syncretism.h"
-#include "libnyfe.h"
 
 /* The label used for KMAC256() when deriving keys. */
 #define SYNCRETISM_LABEL		"SYNCRETISM.KDF"
@@ -119,17 +118,19 @@ main(int argc, char *argv[])
  * Derive the TX and RX keys used for our communication with the peer.
  */
 int
-syncretism_derive_keys(struct conn *c, struct key *rx, struct key *tx)
+syncretism_derive_keys(struct conn *c, struct key *rx, struct key *tx,
+    struct nyfe_agelas *rx_encap, struct nyfe_agelas *tx_encap)
 {
 	int			fd;
 	struct nyfe_kmac256	kdf;
-	u_int8_t		len;
-	u_int8_t		key[32], okm[128];
+	u_int16_t		len;
+	u_int8_t		key[32], okm[256];
 
 	PRECOND(c != NULL);
 	PRECOND(rx != NULL);
 	PRECOND(tx != NULL);
-	PRECOND(sizeof(rx->key) + sizeof(tx->key) == sizeof(okm));
+	PRECOND(rx_encap != NULL);
+	PRECOND(tx_encap != NULL);
 
 	if ((fd = open(keypath,  O_RDONLY)) == -1) {
 		syncretism_log(LOG_NOTICE,
@@ -153,7 +154,7 @@ syncretism_derive_keys(struct conn *c, struct key *rx, struct key *tx)
 	    SYNCRETISM_LABEL, sizeof(SYNCRETISM_LABEL) - 1);
 	nyfe_zeroize(key, sizeof(key));
 
-	len = sizeof(okm);
+	len = htobe16(sizeof(okm));
 
 	nyfe_kmac256_update(&kdf, &len, sizeof(len));
 	nyfe_kmac256_update(&kdf, c->server_random, sizeof(c->server_random));
@@ -163,6 +164,11 @@ syncretism_derive_keys(struct conn *c, struct key *rx, struct key *tx)
 
 	nyfe_memcpy(rx->key, okm, sizeof(rx->key));
 	nyfe_memcpy(tx->key, &okm[sizeof(rx->key)], sizeof(tx->key));
+
+	nyfe_agelas_init(rx_encap,
+	    &okm[sizeof(rx->key) + sizeof(tx->key)], 64);
+	nyfe_agelas_init(tx_encap,
+	    &okm[sizeof(rx->key) + sizeof(tx->key) + 64], 64);
 
 	nyfe_zeroize(okm, sizeof(okm));
 

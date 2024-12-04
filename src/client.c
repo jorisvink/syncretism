@@ -25,7 +25,6 @@
 #include <unistd.h>
 
 #include "syncretism.h"
-#include "libnyfe.h"
 
 static int	client_send_auth(struct conn *);
 static int	client_send_random(struct conn *);
@@ -69,7 +68,8 @@ syncretism_client(const char *ip, u_int16_t port, const char *root, char **argv)
 	if (client_recv_random(&client) == -1)
 		fatal("failed to receive server random data");
 
-	if (syncretism_derive_keys(&client, &client.tx, &client.rx) == -1)
+	if (syncretism_derive_keys(&client, &client.tx, &client.rx,
+	    &client.tx_encap, &client.rx_encap) == -1)
 		fatal("failed to derive keys");
 
 	if (client_send_auth(&client) == -1)

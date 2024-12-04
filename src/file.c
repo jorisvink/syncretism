@@ -27,7 +27,6 @@
 #include <unistd.h>
 
 #include "syncretism.h"
-#include "libnyfe.h"
 
 static int	file_sha3sum(struct file *);
 static int	file_cmp(const FTSENT **, const FTSENT **);

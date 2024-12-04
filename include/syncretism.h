@@ -23,6 +23,8 @@
 #include <string.h>
 #include <syslog.h>
 
+#include "libnyfe.h"
+
 /* Makes life easier. */
 #define errno_s			strerror(errno)
 
@@ -63,14 +65,17 @@ struct key {
  * Client or server connection state.
  */
 struct conn {
-	int		fd;
+	int			fd;
 
-	struct key	rx;
-	struct key	tx;
+	struct key		rx;
+	struct key		tx;
 
-	u_int8_t	token[64];
-	u_int8_t	client_random[32];
-	u_int8_t	server_random[32];
+	struct nyfe_agelas	rx_encap;
+	struct nyfe_agelas	tx_encap;
+
+	u_int8_t		token[64];
+	u_int8_t		client_random[32];
+	u_int8_t		server_random[32];
 };
 
 /*
@@ -97,7 +102,8 @@ int	syncretism_read(int, void *, size_t);
 void	syncretism_log(int, const char *, ...);
 int	syncretism_write(int, const void *, size_t);
 void	syncretism_logv(int, const char *, va_list);
-int	syncretism_derive_keys(struct conn *, struct key *, struct key *);
+int	syncretism_derive_keys(struct conn *, struct key *, struct key *,
+	    struct nyfe_agelas *, struct nyfe_agelas *);
 
 /* src/client.c */
 void	syncretism_client(const char *, u_int16_t, const char *, char **);
