@@ -147,6 +147,8 @@ syncretism_derive_keys(struct conn *c, struct key *rx, struct key *tx,
 		return (-1);
 	}
 
+	(void)close(fd);
+
 	nyfe_zeroize_register(okm, sizeof(okm));
 	nyfe_zeroize_register(&kdf, sizeof(kdf));
 
