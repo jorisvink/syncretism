@@ -34,13 +34,13 @@ static int	server_client_auth(struct conn *);
 static int	server_perform_handshake(struct conn *);
 
 static void	server_client_handle(struct conn *,
-		    struct sockaddr_in *, const char *);
+		    struct sockaddr_in *, const char *, char **);
 
 /*
  * Bind to the given ip:port and handle incoming connections from our peer.
  */
 void
-syncretism_server(const char *ip, u_int16_t port, const char *root)
+syncretism_server(const char *ip, u_int16_t port, const char *root, char **argv)
 {
 	int			fd;
 	struct timeval		tv;
@@ -51,6 +51,7 @@ syncretism_server(const char *ip, u_int16_t port, const char *root)
 	PRECOND(ip != NULL);
 	PRECOND(port > 0);
 	PRECOND(root != NULL);
+	PRECOND(argv != NULL);
 
 	if ((fd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
 		fatal("socket: %s", errno_s);
@@ -85,9 +86,10 @@ syncretism_server(const char *ip, u_int16_t port, const char *root)
 		syncretism_log(LOG_INFO, "client from %s",
 		    inet_ntoa(sin.sin_addr));
 
-		server_client_handle(&client, &sin, root);
+		nyfe_zeroize_register(&client, sizeof(client));
+		server_client_handle(&client, &sin, root, argv);
+		nyfe_zeroize(&client, sizeof(client));
 
-		nyfe_mem_zero(&client, sizeof(client));
 		close(client.fd);
 	}
 }
@@ -96,9 +98,11 @@ syncretism_server(const char *ip, u_int16_t port, const char *root)
  * Handle a handshake with a client and then incoming messages.
  */
 static void
-server_client_handle(struct conn *c, struct sockaddr_in *sin, const char *root)
+server_client_handle(struct conn *c, struct sockaddr_in *sin,
+    const char *root, char **pathv)
 {
 	struct msg		*msg;
+	struct file		*file;
 	size_t			rootlen;
 	const char		*path, *digest;
 	struct file_list	ours, theirs, update, remove;
@@ -106,6 +110,7 @@ server_client_handle(struct conn *c, struct sockaddr_in *sin, const char *root)
 	PRECOND(c != NULL);
 	PRECOND(sin != NULL);
 	PRECOND(root != NULL);
+	PRECOND(pathv != NULL);
 
 	if (server_perform_handshake(c) == -1) {
 		syncretism_log(LOG_INFO, "handshake failed with %s:%u",
@@ -113,59 +118,78 @@ server_client_handle(struct conn *c, struct sockaddr_in *sin, const char *root)
 		return;
 	}
 
+	rootlen = strlen(root);
+
 	TAILQ_INIT(&ours);
 	TAILQ_INIT(&theirs);
-
-	rootlen = strlen(root);
+	TAILQ_INIT(&update);
+	TAILQ_INIT(&remove);
 
 	for (;;) {
 		if ((msg = syncretism_msg_read(c)) == NULL) {
 			syncretism_log(LOG_NOTICE,
 			    "unexpected disconnect from %s:%u",
 			    inet_ntoa(sin->sin_addr), be16toh(sin->sin_port));
-			return;
+			goto cleanup;
 		}
 
-		if (msg->length == strlen(SYNCRETISM_CLIENT_DONE) &&
-		    !memcmp(msg->data, SYNCRETISM_CLIENT_DONE, msg->length)) {
-			syncretism_msg_free(msg);
+		if (msg->length == strlen(SYNCRETISM_FILES_DONE) &&
+		    !memcmp(msg->data, SYNCRETISM_FILES_DONE, msg->length))
 			break;
-		}
 
 		/* This works, msg->data had extra space for the tag. */
 		msg->data[msg->length] = '\0';
 
 		if (syncretism_file_entry_split((char *)msg->data,
 		    &path, &digest) == -1) {
-			syncretism_msg_free(msg);
 			syncretism_log(LOG_NOTICE,
 			    "bad file entry %s:%u",
 			    inet_ntoa(sin->sin_addr), be16toh(sin->sin_port));
-			return;
+			goto cleanup;
 		}
 
 		if (strstr(path, "../")) {
-			syncretism_msg_free(msg);
 			syncretism_log(LOG_NOTICE, "malicous path from %s:%u",
 			    inet_ntoa(sin->sin_addr), be16toh(sin->sin_port));
-			return;
+			goto cleanup;
 		}
 
 		if (strncmp(path, root, rootlen)) {
-			syncretism_msg_free(msg);
 			syncretism_log(LOG_NOTICE,
 			    "path outside root from %s:%u",
 			    inet_ntoa(sin->sin_addr), be16toh(sin->sin_port));
-			return;
+			goto cleanup;
 		}
 
-		syncretism_file_list(&ours, path);
 		syncretism_file_list_add(&theirs, path, digest);
 
 		syncretism_msg_free(msg);
+		msg = NULL;
 	}
 
+	syncretism_file_list(&ours, pathv);
 	syncretism_file_list_diff(&ours, &theirs, &update, &remove);
+
+	TAILQ_FOREACH(file, &update, list)
+		syncretism_file_send(c, file);
+
+	if (syncretism_msg_send(c, SYNCRETISM_FILES_DONE,
+	    strlen(SYNCRETISM_FILES_DONE)) == -1) {
+		syncretism_log(LOG_NOTICE,
+		    "failed to send done to %s:%u",
+		    inet_ntoa(sin->sin_addr), be16toh(sin->sin_port));
+		goto cleanup;
+	}
+
+#if 0
+	TAILQ_FOREACH(file, &remove, list) {
+		syncretism_file_remove(c, file);
+	}
+#endif
+
+cleanup:
+	if (msg != NULL)
+		syncretism_msg_free(msg);
 
 	syncretism_file_list_free(&ours);
 	syncretism_file_list_free(&theirs);

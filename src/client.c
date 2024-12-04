@@ -31,6 +31,7 @@ static int	client_send_auth(struct conn *);
 static int	client_send_random(struct conn *);
 static int	client_recv_random(struct conn *);
 static int	client_send_files(struct conn *, char **);
+static int	client_recv_files(struct conn *, const char *);
 
 /*
  * Perform the syncretism as the client.
@@ -57,6 +58,8 @@ syncretism_client(const char *ip, u_int16_t port, const char *root, char **argv)
 	sin.sin_port = htobe16(port);
 	sin.sin_addr.s_addr = inet_addr(ip);
 
+	nyfe_zeroize_register(&client, sizeof(client));
+
 	if (connect(client.fd, (struct sockaddr *)&sin, sizeof(sin)) == -1)
 		fatal("failed to connect to %s:%u: %s", ip, port, errno_s);
 
@@ -74,6 +77,11 @@ syncretism_client(const char *ip, u_int16_t port, const char *root, char **argv)
 
 	if (client_send_files(&client, argv) == -1)
 		fatal("failed to send our list of files");
+
+	if (client_recv_files(&client, root) == -1)
+		fatal("failed to receive server files");
+
+	nyfe_zeroize(&client, sizeof(client));
 }
 
 /*
@@ -129,26 +137,20 @@ client_send_auth(struct conn *c)
  * them over to the server side so it can tell us what we need to do.
  */
 static int
-client_send_files(struct conn *c, char **argv)
+client_send_files(struct conn *c, char **pathv)
 {
 	struct file		*file;
 	struct file_list	files;
+	int			len, ret;
 	char			buf[1024];
-	int			len, ret, idx;
 
 	PRECOND(c != NULL);
-	PRECOND(argv != NULL);
+	PRECOND(pathv != NULL);
 
-	idx = 0;
 	ret = -1;
 
-	TAILQ_INIT(&files);
-
-	while (argv[idx] != NULL) {
-		if (syncretism_file_list(&files, argv[idx]) == -1)
-			fatal("failed to add %s", argv[idx]);
-		idx++;
-	}
+	if (syncretism_file_list(&files, pathv) == -1)
+		fatal("failed to load files");
 
 	TAILQ_FOREACH(file, &files, list) {
 		len = snprintf(buf,
@@ -161,13 +163,99 @@ client_send_files(struct conn *c, char **argv)
 	}
 
 	if (file == NULL) {
-		if (syncretism_msg_send(c, SYNCRETISM_CLIENT_DONE,
-		    strlen(SYNCRETISM_CLIENT_DONE)) != -1) {
+		if (syncretism_msg_send(c, SYNCRETISM_FILES_DONE,
+		    strlen(SYNCRETISM_FILES_DONE)) != -1) {
 			ret = 0;
 		}
 	}
 
 	syncretism_file_list_free(&files);
+
+	return (ret);
+}
+
+/*
+ * Receive files from the server that we shall store.
+ */
+static int
+client_recv_files(struct conn *c, const char *root)
+{
+	int			ret;
+	struct msg		*msg;
+	char			*spath;
+	size_t			rootlen;
+	const char		*path, *digest;
+
+	PRECOND(c != NULL);
+	PRECOND(root != NULL);
+
+	ret = -1;
+	msg = NULL;
+	spath = NULL;
+	rootlen = strlen(root);
+
+	for (;;) {
+		if ((msg = syncretism_msg_read(c)) == NULL) {
+			syncretism_log(LOG_NOTICE,
+			    "unexpected disconnect from server");
+			goto cleanup;
+		}
+
+		if (msg->length == strlen(SYNCRETISM_FILES_DONE) &&
+		    !memcmp(msg->data, SYNCRETISM_FILES_DONE, msg->length))
+			break;
+
+		/* This works, msg->data had extra space for the tag. */
+		msg->data[msg->length] = '\0';
+
+		if (syncretism_file_entry_split((char *)msg->data,
+		    &path, &digest) == -1) {
+			syncretism_log(LOG_NOTICE,
+			    "bad file entry from server");
+			goto cleanup;
+		}
+
+		if (strstr(path, "../")) {
+			syncretism_log(LOG_NOTICE, "malicous path from server");
+			goto cleanup;
+		}
+
+		if (strncmp(path, root, rootlen)) {
+			syncretism_log(LOG_NOTICE,
+			    "path outside root from server");
+			goto cleanup;
+		}
+
+		if ((spath = strdup(path)) == NULL)
+			fatal("strdup failed");
+
+		syncretism_msg_free(msg);
+
+		if ((msg = syncretism_msg_read(c)) == NULL) {
+			syncretism_log(LOG_NOTICE,
+			    "unexpected disconnect from server");
+			goto cleanup;
+		}
+
+		if (syncretism_file_save(spath, msg->data, msg->length) == -1) {
+			syncretism_log(LOG_NOTICE, "failed to save %s", spath);
+			goto cleanup;
+		}
+
+		free(spath);
+		spath = NULL;
+
+		syncretism_msg_free(msg);
+		msg = NULL;
+	}
+
+	ret = 0;
+
+cleanup:
+	free(spath);
+
+	if (msg != NULL)
+		syncretism_msg_free(msg);
 
 	return (ret);
 }

@@ -29,33 +29,23 @@
 #include "syncretism.h"
 #include "libnyfe.h"
 
-union cp {
-	const char	*cp;
-	char		*p;
-};
-
 static int	file_sha3sum(struct file *);
 static int	file_cmp(const FTSENT **, const FTSENT **);
 
 /*
- * For the given path add all files to the given file list.
+ * Load all files under the given paths into list.
  */
 int
-syncretism_file_list(struct file_list *list, const char *path)
+syncretism_file_list(struct file_list *list, char **pathv)
 {
-	union cp		cp;
 	FTS			*fts;
 	FTSENT			*ent;
 	struct file		*file;
-	char			*pathv[2];
 
 	PRECOND(list != NULL);
 	PRECOND(pathv != NULL);
 
-	cp.cp = path;
-
-	pathv[0] = cp.p;
-	pathv[1] = NULL;
+	TAILQ_INIT(list);
 
 	fts = fts_open(pathv, FTS_NOCHDIR | FTS_PHYSICAL | FTS_XDEV, file_cmp);
 	if (fts == NULL) {
@@ -253,6 +243,157 @@ syncretism_file_list_diff(struct file_list *ours, struct file_list *theirs,
 	printf("REMOVE:\n");
 	TAILQ_FOREACH(a, remove, list)
 		printf("  %s\n", a->path);
+}
+
+/*
+ * Send the given file and its contents to our peer.
+ */
+int
+syncretism_file_send(struct conn *c, struct file *file)
+{
+	struct stat	st;
+	u_int8_t	*buf;
+	char		str[1024];
+	int		fd, ret, len;
+
+	PRECOND(c != NULL);
+	PRECOND(file != NULL);
+
+	ret = -1;
+	buf = NULL;
+
+	if ((fd = open(file->path, O_RDONLY)) == -1) {
+		syncretism_log(LOG_NOTICE,
+		    "failed to open %s: %s", file->path, errno_s);
+		goto cleanup;
+	}
+
+	if (fstat(fd, &st) == -1) {
+		syncretism_log(LOG_NOTICE,
+		    "failed to fstat %s: %s", file->path, errno_s);
+		goto cleanup;
+	}
+
+	if ((buf = calloc(1, st.st_size)) == NULL) {
+		syncretism_log(LOG_NOTICE,
+		    "file data calloc failed (%zu)", (size_t)st.st_size);
+		goto cleanup;
+	}
+
+	if (syncretism_read(fd, buf, st.st_size) == -1) {
+		syncretism_log(LOG_NOTICE,
+		    "failed to read %s into memory", file->path);
+		goto cleanup;
+	}
+
+	len = snprintf(str, sizeof(str), "%s %s", file->path, file->digest);
+	if (len == -1 || (size_t)len >= sizeof(str))
+		fatal("%s: str is too small", __func__);
+
+	if (syncretism_msg_send(c, str, len) == -1) {
+		syncretism_log(LOG_NOTICE,
+		    "failed to send file %s", file->path);
+		goto cleanup;
+	}
+
+	if (syncretism_msg_send(c, buf, st.st_size) == -1) {
+		syncretism_log(LOG_NOTICE,
+		    "failed to send file %s", file->path);
+		goto cleanup;
+	}
+
+	ret = 0;
+
+cleanup:
+	free(buf);
+	(void)close(fd);
+
+	return (ret);
+}
+
+/*
+ * Save the contents of the given message to the given path.
+ */
+int
+syncretism_file_save(char *path, const void *buf, size_t buflen)
+{
+	int		ret, fd, len;
+	char		*p, tmp[1024];
+
+	PRECOND(path != NULL);
+	PRECOND(buf != NULL);
+
+	fd = -1;
+	ret = -1;
+	p = path + 1;
+
+	for (;;) {
+		if ((p = strchr(p, '/')) == NULL)
+			break;
+
+		*p = '\0';
+
+		if (mkdir(path, 0700) == -1 && errno != EEXIST) {
+			syncretism_log(LOG_NOTICE, "failed to create %s: %s",
+			    path, errno_s);
+			goto cleanup;
+		}
+
+		*p = '/';
+		p++;
+	}
+
+	if ((p = strrchr(path, '/')) == NULL) {
+		syncretism_log(LOG_NOTICE, "no slash in %s", path);
+		goto cleanup;
+	}
+
+	len = snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+	if (len == -1 || (size_t)len >= sizeof(tmp)) {
+		syncretism_log(LOG_NOTICE, "failed to create tmp path");
+		goto cleanup;
+	}
+
+	if ((fd = open(tmp, O_CREAT | O_TRUNC | O_WRONLY, 0700)) == -1) {
+		syncretism_log(LOG_NOTICE,
+		    "failed to open %s: %s", tmp, errno_s);
+		goto cleanup;
+	}
+
+	if (syncretism_write(fd, buf, buflen) == -1) {
+		syncretism_log(LOG_NOTICE,
+		    "failed to open %s: %s", tmp, errno_s);
+		goto cleanup;
+	}
+
+	if (close(fd) == -1) {
+		fd = -1;
+		syncretism_log(LOG_NOTICE,
+		    "write errors on %s: %s", tmp, errno_s);
+		goto cleanup;
+	}
+
+	if (rename(tmp, path) == -1) {
+		syncretism_log(LOG_NOTICE,
+		    "rename %s to %s failed: %s", tmp, path, errno_s);
+		goto cleanup;
+	}
+
+	ret = 0;
+	syncretism_log(LOG_NOTICE, "wrote %s (%zu)", path, buflen);
+
+cleanup:
+	if (fd != -1)
+		(void)close(fd);
+
+	if (ret == -1) {
+		if (unlink(tmp) == -1 && errno != ENOENT)  {
+			syncretism_log(LOG_NOTICE,
+			    "unlink on %s failed: %s", tmp, errno_s);
+		}
+	}
+
+	return (ret);
 }
 
 /*

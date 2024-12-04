@@ -34,8 +34,9 @@ int
 main(int argc, char *argv[])
 {
 	u_int16_t		port;
-	int			ch, client;
+	size_t			rootlen;
 	const char		*ip, *root;
+	int			ch, client, idx;
 
 	port = 0;
 	ip = NULL;
@@ -81,18 +82,24 @@ main(int argc, char *argv[])
 	if (client == 0 && port == 0)
 		fatal("no port (-p) has been set");
 
-	if (client && argc == 0)
+	if (argc == 0)
 		fatal("no paths given");
 
 	if (foreground == 0)
 		openlog("syncretism", LOG_NDELAY | LOG_PID, LOG_DAEMON);
+
+	rootlen = strlen(root);
+	for (idx = 0; idx < argc; idx++) {
+		if (strncmp(argv[idx], root, rootlen))
+			fatal("%s not a path under given root", argv[idx]);
+	}
 
 	nyfe_random_init();
 
 	if (client) {
 		syncretism_client(ip, port, root, argv);
 	} else {
-		syncretism_server(ip, port, root);
+		syncretism_server(ip, port, root, argv);
 	}
 
 	return (0);

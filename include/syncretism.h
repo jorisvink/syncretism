@@ -35,8 +35,8 @@
 		}							\
 	} while (0)
 
-/* When the client is done sending its files it'll send this to the server. */
-#define SYNCRETISM_CLIENT_DONE		"done"
+/* File sync done indication. */
+#define SYNCRETISM_FILES_DONE		"done"
 
 /*
  * Represents a file on the server or client, its path and its SHA3-256 digest.
@@ -101,7 +101,9 @@ void	syncretism_client(const char *, u_int16_t, const char *, char **);
 
 /* src/file.c */
 void	syncretism_file_list_free(struct file_list *);
-int	syncretism_file_list(struct file_list *, const char *);
+int	syncretism_file_list(struct file_list *, char **);
+int	syncretism_file_send(struct conn *, struct file *);
+int	syncretism_file_save(char *, const void *, size_t);
 int	syncretism_file_entry_split(char *, const char **, const char **);
 int	syncretism_file_list_add(struct file_list *,
 	    const char *, const char *);
@@ -109,7 +111,7 @@ void	syncretism_file_list_diff(struct file_list *, struct file_list *,
 	    struct file_list *, struct file_list *);
 
 /* src/server.c */
-void	syncretism_server(const char *, u_int16_t, const char *);
+void	syncretism_server(const char *, u_int16_t, const char *, char **);
 
 /* src/msg.c */
 void		syncretism_msg_free(struct msg *);
