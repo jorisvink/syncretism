@@ -235,14 +235,6 @@ syncretism_file_list_diff(struct file_list *ours, struct file_list *theirs,
 			continue;
 		}
 	}
-
-	printf("UPDATE:\n");
-	TAILQ_FOREACH(a, update, list)
-		printf("  %s\n", a->path);
-
-	printf("REMOVE:\n");
-	TAILQ_FOREACH(a, remove, list)
-		printf("  %s\n", a->path);
 }
 
 /*
@@ -341,11 +333,6 @@ syncretism_file_save(char *path, const void *buf, size_t buflen)
 
 		*p = '/';
 		p++;
-	}
-
-	if ((p = strrchr(path, '/')) == NULL) {
-		syncretism_log(LOG_NOTICE, "no slash in %s", path);
-		goto cleanup;
 	}
 
 	len = snprintf(tmp, sizeof(tmp), "%s.tmp", path);
