@@ -92,7 +92,7 @@ struct msg {
 };
 
 /* src/syncretism.c */
-void	fatal(const char *, ...);
+void	fatal(const char *, ...) __attribute__((noreturn));
 int	syncretism_read(int, void *, size_t);
 void	syncretism_log(int, const char *, ...);
 int	syncretism_write(int, const void *, size_t);
