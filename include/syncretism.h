@@ -45,6 +45,7 @@
  */
 struct file {
 	char			*path;
+	u_int64_t		size;
 	int			seen;
 	int			differ;
 	char			digest[65];
@@ -80,9 +81,8 @@ struct conn {
 
 /*
  * Maximum length for an encrypted and authenticated message.
- * This happens to be the size of an ambry :)
  */
-#define SYNCRETISM_MAX_MSG_LEN		8486416
+#define SYNCRETISM_MAX_MSG_LEN		(1024 * 1024)
 
 /* Tag length for an encrypted and authenticated message. */
 #define SYNCRETISM_TAG_LEN		32
@@ -114,8 +114,10 @@ void	syncretism_file_list_free(struct file_list *);
 int	syncretism_file_list(struct file_list *, char **);
 int	syncretism_file_send(struct conn *, struct file *);
 int	syncretism_file_save(char *, const void *, size_t);
+int	syncretism_file_recv(struct conn *, char *, u_int64_t);
 int	syncretism_file_entry_send(struct conn *, struct file *);
-int	syncretism_file_entry_recv(struct conn *, char **, char **);
+int	syncretism_file_entry_recv(struct conn *, char **,
+	    char **, u_int64_t *);
 int	syncretism_file_list_add(struct file_list *,
 	    const char *, const char *);
 void	syncretism_file_list_diff(struct file_list *, struct file_list *,
@@ -131,6 +133,7 @@ int		syncretism_msg_send(struct conn *, const void *, size_t);
 
 struct msg	*syncretism_msg_read(struct conn *);
 char		*syncretism_msg_read_string(struct conn *);
+int		syncretism_msg_read_uint64(struct conn *, u_int64_t *);
 struct msg	*syncretism_msg_pack(struct conn *, const void *, size_t);
 
 #endif

@@ -114,10 +114,8 @@ syncretism_msg_unpack(struct conn *c, struct msg *msg)
 
 	nyfe_zeroize(&cipher, sizeof(cipher));
 
-	if (nyfe_mem_cmp(tag, calc, sizeof(calc))) {
-		printf("tag fail\n");
+	if (nyfe_mem_cmp(tag, calc, sizeof(calc)))
 		return (-1);
-	}
 
 	c->rx.nonce++;
 
@@ -217,6 +215,8 @@ syncretism_msg_read_string(struct conn *c)
 	char		*str;
 	struct msg	*msg;
 
+	PRECOND(c != NULL);
+
 	if ((msg = syncretism_msg_read(c)) == NULL)
 		return (NULL);
 
@@ -229,4 +229,31 @@ syncretism_msg_read_string(struct conn *c)
 	syncretism_msg_free(msg);
 
 	return (str);
+}
+
+/*
+ * Returns a received message as a uint64 to the caller.
+ */
+int
+syncretism_msg_read_uint64(struct conn *c, u_int64_t *res)
+{
+	struct msg	*msg;
+
+	PRECOND(c != NULL);
+	PRECOND(res != NULL);
+
+	if ((msg = syncretism_msg_read(c)) == NULL)
+		return (-1);
+
+	if (msg->length != sizeof(*res)) {
+		syncretism_msg_free(msg);
+		return (-1);
+	}
+
+	memcpy(res, msg->data, msg->length);
+	syncretism_msg_free(msg);
+
+	*res = be64toh(*res);
+
+	return (0);
 }

@@ -14,12 +14,14 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include <sys/param.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 
 #include <ctype.h>
 #include <fts.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,12 +58,6 @@ syncretism_file_list(struct file_list *list, char **pathv)
 		if (S_ISDIR(ent->fts_statp->st_mode))
 			continue;
 
-		if (ent->fts_statp->st_size > SYNCRETISM_MAX_MSG_LEN) {
-			syncretism_log(LOG_INFO, "skipping %s (too large)",
-			    ent->fts_accpath);
-			continue;
-		}
-
 		if ((file = calloc(1, sizeof(*file))) == NULL)
 			fatal("calloc failed");
 
@@ -74,6 +70,7 @@ syncretism_file_list(struct file_list *list, char **pathv)
 			continue;
 		}
 
+		file->size = ent->fts_statp->st_size;
 		TAILQ_INSERT_TAIL(list, file, list);
 	}
 
@@ -184,7 +181,6 @@ syncretism_file_list_diff(struct file_list *ours, struct file_list *theirs,
 		if (b->seen == 0 || b->differ == 1) {
 			TAILQ_REMOVE(ours, b, list);
 			TAILQ_INSERT_TAIL(update, b, list);
-			continue;
 		}
 	}
 }
@@ -195,6 +191,8 @@ syncretism_file_list_diff(struct file_list *ours, struct file_list *theirs,
 int
 syncretism_file_done(struct conn *c)
 {
+	u_int64_t	dummy;
+
 	PRECOND(c != NULL);
 
 	if (syncretism_msg_send(c, "done", 4) == -1) {
@@ -209,6 +207,14 @@ syncretism_file_done(struct conn *c)
 		return (-1);
 	}
 
+	nyfe_random_bytes(&dummy, sizeof(dummy));
+
+	if (syncretism_msg_send(c, &dummy, sizeof(dummy)) == -1) {
+		syncretism_log(LOG_NOTICE,
+		    "failed to send file done size indication");
+		return (-1);
+	}
+
 	return (0);
 }
 
@@ -218,6 +224,8 @@ syncretism_file_done(struct conn *c)
 int
 syncretism_file_entry_send(struct conn *c, struct file *file)
 {
+	u_int64_t	sz;
+
 	PRECOND(c != NULL);
 	PRECOND(file != NULL);
 
@@ -233,6 +241,14 @@ syncretism_file_entry_send(struct conn *c, struct file *file)
 		return (-1);
 	}
 
+	sz = htobe64(file->size);
+
+	if (syncretism_msg_send(c, &sz, sizeof(sz)) == -1) {
+		syncretism_log(LOG_NOTICE,
+		    "failed to send file entry size");
+		return (-1);
+	}
+
 	return (0);
 }
 
@@ -240,8 +256,10 @@ syncretism_file_entry_send(struct conn *c, struct file *file)
  * Receive a file entry from our peer and return path and digest to caller.
  */
 int
-syncretism_file_entry_recv(struct conn *c, char **path, char **digest)
+syncretism_file_entry_recv(struct conn *c, char **path,
+    char **digest, u_int64_t *sz)
 {
+	u_int64_t		tmp;
 	int			ret;
 	char			*p, *d;
 	size_t			idx, len;
@@ -249,6 +267,7 @@ syncretism_file_entry_recv(struct conn *c, char **path, char **digest)
 	PRECOND(c != NULL);
 	PRECOND(path != NULL);
 	PRECOND(digest != NULL);
+	/* sz can be NULL. */
 
 	p = NULL;
 	d = NULL;
@@ -257,10 +276,16 @@ syncretism_file_entry_recv(struct conn *c, char **path, char **digest)
 	*path = NULL;
 	*digest = NULL;
 
+	if (sz == NULL)
+		sz = &tmp;
+
 	if ((p = syncretism_msg_read_string(c)) == NULL)
 		goto cleanup;
 
 	if ((d = syncretism_msg_read_string(c)) == NULL)
+		goto cleanup;
+
+	if (syncretism_msg_read_uint64(c, sz) == -1)
 		goto cleanup;
 
 	if (!strcmp(p, "done") && !strcmp(d, "-")) {
@@ -268,6 +293,13 @@ syncretism_file_entry_recv(struct conn *c, char **path, char **digest)
 		*digest = d;
 		return (0);
 	}
+
+#if 0
+	if (p[0] == '\0' || p[0] == '/') {
+		syncretism_log(LOG_NOTICE, "file entry: a path is invalid");
+		goto cleanup;
+	}
+#endif
 
 	len = strlen(p);
 	for (idx = 0; idx < len; idx++) {
@@ -315,6 +347,7 @@ syncretism_file_send(struct conn *c, struct file *file)
 {
 	struct stat	st;
 	u_int8_t	*buf;
+	size_t		toread;
 	int		fd, ret;
 
 	PRECOND(c != NULL);
@@ -335,15 +368,9 @@ syncretism_file_send(struct conn *c, struct file *file)
 		goto cleanup;
 	}
 
-	if ((buf = calloc(1, st.st_size)) == NULL) {
+	if ((buf = calloc(1, SYNCRETISM_MAX_MSG_LEN)) == NULL) {
 		syncretism_log(LOG_NOTICE,
 		    "file data calloc failed (%zu)", (size_t)st.st_size);
-		goto cleanup;
-	}
-
-	if (syncretism_read(fd, buf, st.st_size) == -1) {
-		syncretism_log(LOG_NOTICE,
-		    "failed to read %s into memory", file->path);
 		goto cleanup;
 	}
 
@@ -353,10 +380,21 @@ syncretism_file_send(struct conn *c, struct file *file)
 		goto cleanup;
 	}
 
-	if (syncretism_msg_send(c, buf, st.st_size) == -1) {
-		syncretism_log(LOG_NOTICE,
-		    "failed to send file %s", file->path);
-		goto cleanup;
+	while (st.st_size != 0) {
+		toread = MIN(st.st_size, SYNCRETISM_MAX_MSG_LEN);
+		if (syncretism_read(fd, buf, toread) == -1) {
+			syncretism_log(LOG_NOTICE,
+			    "failed to read chunk of %s", file->path);
+			goto cleanup;
+		}
+
+		if (syncretism_msg_send(c, buf, toread) == -1) {
+			syncretism_log(LOG_NOTICE,
+			    "failed to send file chunk of %s", file->path);
+			goto cleanup;
+		}
+
+		st.st_size -= toread;
 	}
 
 	ret = 0;
@@ -369,16 +407,18 @@ cleanup:
 }
 
 /*
- * Save the contents of the given message to the given path.
+ * Receive a file from our peer and write it to disk.
  */
 int
-syncretism_file_save(char *path, const void *buf, size_t buflen)
+syncretism_file_recv(struct conn *c, char *path, u_int64_t sz)
 {
+	struct msg	*msg;
+	u_int64_t	total;
 	int		ret, fd, len;
 	char		*p, tmp[1024];
 
+	PRECOND(c != NULL);
 	PRECOND(path != NULL);
-	PRECOND(buf != NULL);
 
 	fd = -1;
 	ret = -1;
@@ -412,10 +452,26 @@ syncretism_file_save(char *path, const void *buf, size_t buflen)
 		goto cleanup;
 	}
 
-	if (syncretism_write(fd, buf, buflen) == -1) {
-		syncretism_log(LOG_NOTICE,
-		    "failed to open %s: %s", tmp, errno_s);
-		goto cleanup;
+	total = 0;
+
+	while (sz != 0) {
+		if ((msg = syncretism_msg_read(c)) == NULL) {
+			syncretism_log(LOG_NOTICE,
+			    "failed to receive chunk for %s", path);
+			goto cleanup;
+		}
+
+		if (syncretism_write(fd, msg->data, msg->length) == -1) {
+			syncretism_msg_free(msg);
+			syncretism_log(LOG_NOTICE,
+			    "failed to write chunk of %s: %s", path, errno_s);
+			goto cleanup;
+		}
+
+		sz -= msg->length;
+		total += msg->length;
+
+		syncretism_msg_free(msg);
 	}
 
 	if (close(fd) == -1) {
@@ -432,7 +488,7 @@ syncretism_file_save(char *path, const void *buf, size_t buflen)
 	}
 
 	ret = 0;
-	syncretism_log(LOG_NOTICE, "wrote %s (%zu)", path, buflen);
+	syncretism_log(LOG_NOTICE, "wrote %s (%zu)", path, total);
 
 cleanup:
 	if (fd != -1)

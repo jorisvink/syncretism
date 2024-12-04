@@ -131,7 +131,7 @@ server_client_handle(struct conn *c, struct sockaddr_in *sin,
 		path = NULL;
 		digest = NULL;
 
-		if (syncretism_file_entry_recv(c, &path, &digest) == -1) {
+		if (syncretism_file_entry_recv(c, &path, &digest, NULL) == -1) {
 			syncretism_log(LOG_NOTICE,
 			    "unexpected disconnect from %s:%u",
 			    inet_ntoa(sin->sin_addr), be16toh(sin->sin_port));

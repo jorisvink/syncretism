@@ -174,8 +174,8 @@ client_send_files(struct conn *c, char **pathv)
 static int
 client_recv_files(struct conn *c, const char *root)
 {
+	u_int64_t		sz;
 	int			ret;
-	struct msg		*msg;
 	size_t			rootlen;
 	char			*path, *digest;
 
@@ -183,15 +183,13 @@ client_recv_files(struct conn *c, const char *root)
 	PRECOND(root != NULL);
 
 	ret = -1;
-	msg = NULL;
 	rootlen = strlen(root);
 
 	for (;;) {
-		msg = NULL;
 		path = NULL;
 		digest = NULL;
 
-		if (syncretism_file_entry_recv(c, &path, &digest) == -1) {
+		if (syncretism_file_entry_recv(c, &path, &digest, &sz) == -1) {
 			syncretism_log(LOG_NOTICE,
 			    "unexpected disconnect from server");
 			goto cleanup;
@@ -211,20 +209,14 @@ client_recv_files(struct conn *c, const char *root)
 			goto cleanup;
 		}
 
-		if ((msg = syncretism_msg_read(c)) == NULL) {
+		if (syncretism_file_recv(c, path, sz) == -1) {
 			syncretism_log(LOG_NOTICE,
-			    "unexpected disconnect from server");
-			goto cleanup;
-		}
-
-		if (syncretism_file_save(path, msg->data, msg->length) == -1) {
-			syncretism_log(LOG_NOTICE, "failed to save %s", path);
+			    "failed to receive %s", path);
 			goto cleanup;
 		}
 
 		free(path);
 		free(digest);
-		syncretism_msg_free(msg);
 	}
 
 	ret = 0;
@@ -232,9 +224,6 @@ client_recv_files(struct conn *c, const char *root)
 cleanup:
 	free(path);
 	free(digest);
-
-	if (msg != NULL)
-		syncretism_msg_free(msg);
 
 	return (ret);
 }
