@@ -42,11 +42,11 @@ static void	server_client_handle(struct conn *,
 void
 syncretism_server(const char *ip, u_int16_t port, const char *root, char **argv)
 {
-	int			fd;
 	struct timeval		tv;
 	struct sockaddr_in	sin;
 	struct conn		client;
 	socklen_t		sinlen;
+	int			fd, on;
 
 	PRECOND(ip != NULL);
 	PRECOND(port > 0);
@@ -55,6 +55,10 @@ syncretism_server(const char *ip, u_int16_t port, const char *root, char **argv)
 
 	if ((fd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
 		fatal("socket: %s", errno_s);
+
+	on = 1;
+	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) == -1)
+		fatal("setsockopt(SO_REUSEADDR): %s", errno_s);
 
 	memset(&sin, 0, sizeof(sin));
 
@@ -101,10 +105,9 @@ static void
 server_client_handle(struct conn *c, struct sockaddr_in *sin,
     const char *root, char **pathv)
 {
-	struct msg		*msg;
 	struct file		*file;
 	size_t			rootlen;
-	const char		*path, *digest;
+	char			*path, *digest;
 	struct file_list	ours, theirs, update, remove;
 
 	PRECOND(c != NULL);
@@ -118,35 +121,26 @@ server_client_handle(struct conn *c, struct sockaddr_in *sin,
 		return;
 	}
 
-	rootlen = strlen(root);
-
 	TAILQ_INIT(&ours);
 	TAILQ_INIT(&theirs);
 	TAILQ_INIT(&update);
 	TAILQ_INIT(&remove);
 
+	rootlen = strlen(root);
+
 	for (;;) {
-		if ((msg = syncretism_msg_read(c)) == NULL) {
+		path = NULL;
+		digest = NULL;
+
+		if (syncretism_file_entry_recv(c, &path, &digest) == -1) {
 			syncretism_log(LOG_NOTICE,
 			    "unexpected disconnect from %s:%u",
 			    inet_ntoa(sin->sin_addr), be16toh(sin->sin_port));
 			goto cleanup;
 		}
 
-		if (msg->length == strlen(SYNCRETISM_FILES_DONE) &&
-		    !memcmp(msg->data, SYNCRETISM_FILES_DONE, msg->length))
+		if (!strcmp(path, "done") && !strcmp(digest, "-"))
 			break;
-
-		/* This works, msg->data had extra space for the tag. */
-		msg->data[msg->length] = '\0';
-
-		if (syncretism_file_entry_split((char *)msg->data,
-		    &path, &digest) == -1) {
-			syncretism_log(LOG_NOTICE,
-			    "bad file entry %s:%u",
-			    inet_ntoa(sin->sin_addr), be16toh(sin->sin_port));
-			goto cleanup;
-		}
 
 		if (strstr(path, "../")) {
 			syncretism_log(LOG_NOTICE, "malicous path from %s:%u",
@@ -163,8 +157,8 @@ server_client_handle(struct conn *c, struct sockaddr_in *sin,
 
 		syncretism_file_list_add(&theirs, path, digest);
 
-		syncretism_msg_free(msg);
-		msg = NULL;
+		free(path);
+		free(digest);
 	}
 
 	syncretism_file_list(&ours, pathv);
@@ -173,23 +167,16 @@ server_client_handle(struct conn *c, struct sockaddr_in *sin,
 	TAILQ_FOREACH(file, &update, list)
 		syncretism_file_send(c, file);
 
-	if (syncretism_msg_send(c, SYNCRETISM_FILES_DONE,
-	    strlen(SYNCRETISM_FILES_DONE)) == -1) {
+	if (syncretism_file_done(c) == -1) {
 		syncretism_log(LOG_NOTICE,
 		    "failed to send done to %s:%u",
 		    inet_ntoa(sin->sin_addr), be16toh(sin->sin_port));
 		goto cleanup;
 	}
 
-#if 0
-	TAILQ_FOREACH(file, &remove, list) {
-		syncretism_file_remove(c, file);
-	}
-#endif
-
 cleanup:
-	if (msg != NULL)
-		syncretism_msg_free(msg);
+	free(path);
+	free(digest);
 
 	syncretism_file_list_free(&ours);
 	syncretism_file_list_free(&theirs);

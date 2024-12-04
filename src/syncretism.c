@@ -25,10 +25,14 @@
 #include "syncretism.h"
 #include "libnyfe.h"
 
-/* Our KDF label. */
+/* The label used for KMAC256() when deriving keys. */
 #define SYNCRETISM_LABEL		"SYNCRETISM.KDF"
 
-static int	foreground = 1;
+/* For server mode, we can daemonize if we want too. */
+static int		foreground = 1;
+
+/* The path to the key file that is to be used. */
+static const char	*keypath = NULL;
 
 int
 main(int argc, char *argv[])
@@ -43,7 +47,7 @@ main(int argc, char *argv[])
 	root = NULL;
 	client = -1;
 
-	while ((ch = getopt(argc, argv, "cdi:p:r:s")) != -1) {
+	while ((ch = getopt(argc, argv, "cdi:k:p:r:s")) != -1) {
 		switch (ch) {
 		case 'c':
 			client = 1;
@@ -53,6 +57,9 @@ main(int argc, char *argv[])
 			break;
 		case 'i':
 			ip = optarg;
+			break;
+		case 'k':
+			keypath = optarg;
 			break;
 		case 'p':
 			/* XXX */
@@ -72,6 +79,9 @@ main(int argc, char *argv[])
 
 	if (client == -1)
 		fatal("no server (-s) or client (-c) specified");
+
+	if (keypath == NULL)
+		fatal("no key path (-k) has been set");
 
 	if (ip == NULL)
 		fatal("no ip (-i) has been set");
@@ -121,7 +131,7 @@ syncretism_derive_keys(struct conn *c, struct key *rx, struct key *tx)
 	PRECOND(tx != NULL);
 	PRECOND(sizeof(rx->key) + sizeof(tx->key) == sizeof(okm));
 
-	if ((fd = open("sync.key", O_RDONLY)) == -1) {
+	if ((fd = open(keypath,  O_RDONLY)) == -1) {
 		syncretism_log(LOG_NOTICE,
 		    "failed to open syncretism key: %s", errno_s);
 		return (-1);
@@ -174,7 +184,6 @@ syncretism_write(int fd, const void *data, size_t len)
 
 	PRECOND(fd >= 0);
 	PRECOND(data != NULL);
-	PRECOND(len > 0);
 
 	off = 0;
 	ptr = data;
@@ -206,7 +215,6 @@ syncretism_read(int fd, void *data, size_t len)
 
 	PRECOND(fd >= 0);
 	PRECOND(data != NULL);
-	PRECOND(len > 0);
 
 	off = 0;
 	ptr = data;

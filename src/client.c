@@ -139,34 +139,28 @@ client_send_auth(struct conn *c)
 static int
 client_send_files(struct conn *c, char **pathv)
 {
+	int			ret;
 	struct file		*file;
 	struct file_list	files;
-	int			len, ret;
-	char			buf[1024];
 
 	PRECOND(c != NULL);
 	PRECOND(pathv != NULL);
 
 	ret = -1;
 
-	if (syncretism_file_list(&files, pathv) == -1)
-		fatal("failed to load files");
+	if (syncretism_file_list(&files, pathv) == -1) {
+		syncretism_file_list_free(&files);
+		return (-1);
+	}
 
 	TAILQ_FOREACH(file, &files, list) {
-		len = snprintf(buf,
-		    sizeof(buf), "%s %s", file->path, file->digest);
-		if (len == -1 || (size_t)len >= sizeof(buf))
-			fatal("%s: buf is too small", __func__);
-
-		if (syncretism_msg_send(c, buf, len) == -1)
+		if (syncretism_file_entry_send(c, file) == -1)
 			break;
 	}
 
 	if (file == NULL) {
-		if (syncretism_msg_send(c, SYNCRETISM_FILES_DONE,
-		    strlen(SYNCRETISM_FILES_DONE)) != -1) {
+		if (syncretism_file_done(c) != -1)
 			ret = 0;
-		}
 	}
 
 	syncretism_file_list_free(&files);
@@ -182,38 +176,29 @@ client_recv_files(struct conn *c, const char *root)
 {
 	int			ret;
 	struct msg		*msg;
-	char			*spath;
 	size_t			rootlen;
-	const char		*path, *digest;
+	char			*path, *digest;
 
 	PRECOND(c != NULL);
 	PRECOND(root != NULL);
 
 	ret = -1;
 	msg = NULL;
-	spath = NULL;
 	rootlen = strlen(root);
 
 	for (;;) {
-		if ((msg = syncretism_msg_read(c)) == NULL) {
+		msg = NULL;
+		path = NULL;
+		digest = NULL;
+
+		if (syncretism_file_entry_recv(c, &path, &digest) == -1) {
 			syncretism_log(LOG_NOTICE,
 			    "unexpected disconnect from server");
 			goto cleanup;
 		}
 
-		if (msg->length == strlen(SYNCRETISM_FILES_DONE) &&
-		    !memcmp(msg->data, SYNCRETISM_FILES_DONE, msg->length))
+		if (!strcmp(path, "done") && !strcmp(digest, "-"))
 			break;
-
-		/* This works, msg->data had extra space for the tag. */
-		msg->data[msg->length] = '\0';
-
-		if (syncretism_file_entry_split((char *)msg->data,
-		    &path, &digest) == -1) {
-			syncretism_log(LOG_NOTICE,
-			    "bad file entry from server");
-			goto cleanup;
-		}
 
 		if (strstr(path, "../")) {
 			syncretism_log(LOG_NOTICE, "malicous path from server");
@@ -226,33 +211,27 @@ client_recv_files(struct conn *c, const char *root)
 			goto cleanup;
 		}
 
-		if ((spath = strdup(path)) == NULL)
-			fatal("strdup failed");
-
-		syncretism_msg_free(msg);
-
 		if ((msg = syncretism_msg_read(c)) == NULL) {
 			syncretism_log(LOG_NOTICE,
 			    "unexpected disconnect from server");
 			goto cleanup;
 		}
 
-		if (syncretism_file_save(spath, msg->data, msg->length) == -1) {
-			syncretism_log(LOG_NOTICE, "failed to save %s", spath);
+		if (syncretism_file_save(path, msg->data, msg->length) == -1) {
+			syncretism_log(LOG_NOTICE, "failed to save %s", path);
 			goto cleanup;
 		}
 
-		free(spath);
-		spath = NULL;
-
+		free(path);
+		free(digest);
 		syncretism_msg_free(msg);
-		msg = NULL;
 	}
 
 	ret = 0;
 
 cleanup:
-	free(spath);
+	free(path);
+	free(digest);
 
 	if (msg != NULL)
 		syncretism_msg_free(msg);

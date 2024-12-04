@@ -36,7 +36,7 @@ syncretism_msg_pack(struct conn *c, const void *data, size_t len)
 	u_int8_t		block[136];
 
 	PRECOND(data != NULL);
-	PRECOND(len > 0 && len < SYNCRETISM_MAX_MSG_LEN);
+	PRECOND(len < SYNCRETISM_MAX_MSG_LEN);
 
 	if ((msg = calloc(1, sizeof(*msg))) == NULL)
 		fatal("calloc: failed to allocate msg");
@@ -59,7 +59,8 @@ syncretism_msg_pack(struct conn *c, const void *data, size_t len)
 	nyfe_memcpy(block, &nonce, sizeof(nonce));
 
 	nyfe_agelas_encrypt(&cipher, block, block, sizeof(block));
-	nyfe_agelas_encrypt(&cipher, data, msg->data, len);
+	if (len > 0)
+		nyfe_agelas_encrypt(&cipher, data, msg->data, len);
 	nyfe_agelas_authenticate(&cipher, &msg->data[len], SYNCRETISM_TAG_LEN);
 
 	nyfe_zeroize(&cipher, sizeof(cipher));
@@ -102,7 +103,8 @@ syncretism_msg_unpack(struct conn *c, struct msg *msg)
 	nyfe_memcpy(block, &nonce, sizeof(nonce));
 
 	nyfe_agelas_encrypt(&cipher, block, block, sizeof(block));
-	nyfe_agelas_decrypt(&cipher, msg->data, msg->data, msg->length);
+	if (msg->length > 0)
+		nyfe_agelas_decrypt(&cipher, msg->data, msg->data, msg->length);
 	nyfe_agelas_authenticate(&cipher, calc, sizeof(calc));
 
 	nyfe_zeroize(&cipher, sizeof(cipher));
@@ -123,7 +125,8 @@ syncretism_msg_free(struct msg *msg)
 {
 	PRECOND(msg != NULL);
 
-	nyfe_mem_zero(msg->data, msg->length);
+	if (msg->length > 0)
+		nyfe_mem_zero(msg->data, msg->length);
 
 	free(msg->data);
 	free(msg);
@@ -141,7 +144,7 @@ syncretism_msg_send(struct conn *c, const void *buf, size_t buflen)
 
 	PRECOND(c != NULL);
 	PRECOND(buf != NULL);
-	PRECOND(buflen > 0 && buflen < SYNCRETISM_MAX_MSG_LEN);
+	PRECOND(buflen < SYNCRETISM_MAX_MSG_LEN);
 
 	msg = syncretism_msg_pack(c, buf, buflen);
 	len = htobe32(msg->length);
@@ -197,4 +200,27 @@ syncretism_msg_read(struct conn *c)
 	}
 
 	return (msg);
+}
+
+/*
+ * Returns a received message as a C-string to the caller.
+ */
+char *
+syncretism_msg_read_string(struct conn *c)
+{
+	char		*str;
+	struct msg	*msg;
+
+	if ((msg = syncretism_msg_read(c)) == NULL)
+		return (NULL);
+
+	if ((str = calloc(1, msg->length + 1)) == NULL)
+		fatal("calloc");
+
+	memcpy(str, msg->data, msg->length);
+	str[msg->length] = '\0';
+
+	syncretism_msg_free(msg);
+
+	return (str);
 }

@@ -47,7 +47,7 @@ syncretism_file_list(struct file_list *list, char **pathv)
 
 	TAILQ_INIT(list);
 
-	fts = fts_open(pathv, FTS_NOCHDIR | FTS_PHYSICAL | FTS_XDEV, file_cmp);
+	fts = fts_open(pathv, FTS_NOCHDIR | FTS_LOGICAL | FTS_XDEV, file_cmp);
 	if (fts == NULL) {
 		syncretism_log(LOG_NOTICE, "fts_open: %s", errno_s);
 		return (-1);
@@ -56,6 +56,12 @@ syncretism_file_list(struct file_list *list, char **pathv)
 	while ((ent = fts_read(fts)) != NULL) {
 		if (S_ISDIR(ent->fts_statp->st_mode))
 			continue;
+
+		if (ent->fts_statp->st_size > SYNCRETISM_MAX_MSG_LEN) {
+			syncretism_log(LOG_INFO, "skipping %s (too large)",
+			    ent->fts_accpath);
+			continue;
+		}
 
 		if ((file = calloc(1, sizeof(*file))) == NULL)
 			fatal("calloc failed");
@@ -92,59 +98,6 @@ syncretism_file_list_free(struct file_list *list)
 		free(file->path);
 		free(file);
 	}
-}
-
-/*
- * Split a file entry into path and digest and perform sanity checks.
- */
-int
-syncretism_file_entry_split(char *entry, const char **path, const char **digest)
-{
-	char		*p;
-	size_t		idx, len;
-
-	PRECOND(entry != NULL);
-	PRECOND(path != NULL);
-	PRECOND(digest != NULL);
-
-	*path = NULL;
-	*digest = NULL;
-
-	if ((p = strchr(entry, ' ')) == NULL) {
-		syncretism_log(LOG_NOTICE, "file entry: invalid format");
-		return (-1);
-	}
-
-	*(p++) = '\0';
-	len = strlen(p);
-
-	if (len != 64) {
-		syncretism_log(LOG_NOTICE,
-		    "file entry: a digest length is invalid (%zu)", len);
-		return (-1);
-	}
-
-	for (idx = 0; idx < len; idx++) {
-		if (!isxdigit((unsigned char)p[idx])) {
-			syncretism_log(LOG_NOTICE,
-			    "file entry: a digest contains a non-hex digit");
-			return (-1);
-		}
-	}
-
-	len = strlen(entry);
-	for (idx = 0; idx < len; idx++) {
-		if (!isprint((unsigned char)entry[idx])) {
-			syncretism_log(LOG_NOTICE,
-			    "file entry: a path contains bad vibes");
-			return (-1);
-		}
-	}
-
-	*path = entry;
-	*digest = p;
-
-	return (0);
 }
 
 /*
@@ -238,6 +191,124 @@ syncretism_file_list_diff(struct file_list *ours, struct file_list *theirs,
 }
 
 /*
+ * Send an indication to our peer that we are done with sending files.
+ */
+int
+syncretism_file_done(struct conn *c)
+{
+	PRECOND(c != NULL);
+
+	if (syncretism_msg_send(c, "done", 4) == -1) {
+		syncretism_log(LOG_NOTICE,
+		    "failed to send file done path indication");
+		return (-1);
+	}
+
+	if (syncretism_msg_send(c, "-", 1) == -1) {
+		syncretism_log(LOG_NOTICE,
+		    "failed to send file done digest indication");
+		return (-1);
+	}
+
+	return (0);
+}
+
+/*
+ * Send a file entry to our peer.
+ */
+int
+syncretism_file_entry_send(struct conn *c, struct file *file)
+{
+	PRECOND(c != NULL);
+	PRECOND(file != NULL);
+
+	if (syncretism_msg_send(c, file->path, strlen(file->path)) == -1) {
+		syncretism_log(LOG_NOTICE,
+		    "failed to send file entry path");
+		return (-1);
+	}
+
+	if (syncretism_msg_send(c, file->digest, strlen(file->digest)) == -1) {
+		syncretism_log(LOG_NOTICE,
+		    "failed to send file entry digest");
+		return (-1);
+	}
+
+	return (0);
+}
+
+/*
+ * Receive a file entry from our peer and return path and digest to caller.
+ */
+int
+syncretism_file_entry_recv(struct conn *c, char **path, char **digest)
+{
+	int			ret;
+	char			*p, *d;
+	size_t			idx, len;
+
+	PRECOND(c != NULL);
+	PRECOND(path != NULL);
+	PRECOND(digest != NULL);
+
+	p = NULL;
+	d = NULL;
+	ret = -1;
+
+	*path = NULL;
+	*digest = NULL;
+
+	if ((p = syncretism_msg_read_string(c)) == NULL)
+		goto cleanup;
+
+	if ((d = syncretism_msg_read_string(c)) == NULL)
+		goto cleanup;
+
+	if (!strcmp(p, "done") && !strcmp(d, "-")) {
+		*path = p;
+		*digest = d;
+		return (0);
+	}
+
+	len = strlen(p);
+	for (idx = 0; idx < len; idx++) {
+		if (!isprint((unsigned char)p[idx])) {
+			syncretism_log(LOG_NOTICE,
+			    "file entry: a path contains bad vibes");
+			goto cleanup;
+		}
+	}
+
+	len = strlen(d);
+	if (len != 64) {
+		syncretism_log(LOG_NOTICE,
+		    "file entry: a digest is invalid (%zu) (%s)", len, d);
+		goto cleanup;
+	}
+
+	for (idx = 0; idx < len; idx++) {
+		if (!isxdigit((unsigned char)d[idx])) {
+			syncretism_log(LOG_NOTICE,
+			    "file entry: a digest contains a non-hex digit");
+			return (-1);
+		}
+	}
+
+	*path = p;
+	*digest = d;
+
+	ret = 0;
+
+cleanup:
+	if (ret == -1) {
+		free(p);
+		free(d);
+	}
+
+	return (ret);
+}
+
+/*
  * Send the given file and its contents to our peer.
  */
 int
@@ -245,8 +316,7 @@ syncretism_file_send(struct conn *c, struct file *file)
 {
 	struct stat	st;
 	u_int8_t	*buf;
-	char		str[1024];
-	int		fd, ret, len;
+	int		fd, ret;
 
 	PRECOND(c != NULL);
 	PRECOND(file != NULL);
@@ -278,13 +348,9 @@ syncretism_file_send(struct conn *c, struct file *file)
 		goto cleanup;
 	}
 
-	len = snprintf(str, sizeof(str), "%s %s", file->path, file->digest);
-	if (len == -1 || (size_t)len >= sizeof(str))
-		fatal("%s: str is too small", __func__);
-
-	if (syncretism_msg_send(c, str, len) == -1) {
+	if (syncretism_file_entry_send(c, file) == -1) {
 		syncretism_log(LOG_NOTICE,
-		    "failed to send file %s", file->path);
+		    "failed to send file entry for %s", file->path);
 		goto cleanup;
 	}
 
