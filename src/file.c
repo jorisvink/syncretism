@@ -152,36 +152,55 @@ syncretism_file_list_diff(struct file_list *ours, struct file_list *theirs,
 	TAILQ_INIT(remove);
 
 	/* Determine which files exist on both sides. */
-	TAILQ_FOREACH(a, theirs, list) {
-		TAILQ_FOREACH(b, ours, list) {
+	for (a = TAILQ_FIRST(theirs); a != NULL; a = an) {
+		an = TAILQ_NEXT(a, list);
+
+		for (b = TAILQ_FIRST(ours); b != NULL; b = bn) {
+			bn = TAILQ_NEXT(b, list);
+
 			if (!strcmp(a->path, b->path)) {
+				TAILQ_REMOVE(theirs, a, list);
+				TAILQ_REMOVE(ours, b, list);
+
 				a->seen = 1;
 				b->seen = 1;
-				if (strcmp(a->digest, b->digest))
+
+				if (strcmp(a->digest, b->digest)) {
 					b->differ = 1;
+					TAILQ_INSERT_TAIL(update, b, list);
+				} else {
+					free(b->path);
+					free(b);
+				}
+
+				free(a->path);
+				free(a);
+
 				break;
 			}
 		}
 	}
 
-	/* All entries under theirs that aren't seen are to be removed. */
+	/* Remaining theirs entries are now things to be removed. */
 	for (a = TAILQ_FIRST(theirs); a != NULL; a = an) {
 		an = TAILQ_NEXT(a, list);
 
-		if (a->seen == 0) {
-			TAILQ_REMOVE(theirs, a, list);
-			TAILQ_INSERT_TAIL(remove, a, list);
-		}
+		if (a->seen != 0)
+			fatal("found %s where seen != 0 but on list", a->path);
+
+		TAILQ_REMOVE(theirs, a, list);
+		TAILQ_INSERT_TAIL(remove, a, list);
 	}
 
-	/* Determine which files from ours need updating. */
+	/* Remaining our entries are things that also need updates. */
 	for (b = TAILQ_FIRST(ours); b != NULL; b = bn) {
 		bn = TAILQ_NEXT(b, list);
 
-		if (b->seen == 0 || b->differ == 1) {
-			TAILQ_REMOVE(ours, b, list);
-			TAILQ_INSERT_TAIL(update, b, list);
-		}
+		if (b->seen != 0)
+			fatal("found %s where seen != 0 but on list", a->path);
+
+		TAILQ_REMOVE(ours, b, list);
+		TAILQ_INSERT_TAIL(update, b, list);
 	}
 }
 
