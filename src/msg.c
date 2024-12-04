@@ -182,7 +182,6 @@ syncretism_msg_read(struct conn *c)
 	nyfe_agelas_decrypt(&c->rx_encap, &len, &len, sizeof(len));
 
 	len = be32toh(len);
-	printf("length is %u\n", len);
 	if (len < SYNCRETISM_TAG_LEN || len > SYNCRETISM_MAX_MSG_LEN) {
 		syncretism_log(LOG_NOTICE, "received weird length (%u)", len);
 		return (NULL);
