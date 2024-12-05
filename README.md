@@ -1,8 +1,9 @@
 # Syncretism
 
 Syncretism provides a secure way of synchronizing a local directory
-with a remote one. Its code-base is small, reviewable and written
-with extreme care.
+with a remote one.
+
+Its code-base is small, reviewable and written with extreme care.
 
 ## Usage
 
