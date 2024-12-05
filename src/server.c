@@ -86,8 +86,8 @@ syncretism_server(const char *ip, u_int16_t port, const char *root, char **argv)
 		    SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) == -1)
 			fatal("setsockopt(SO_RCVTIMEO): %s", errno_s);
 
-		syncretism_log(LOG_INFO, "client from %s",
-		    inet_ntoa(sin.sin_addr));
+		syncretism_log(LOG_INFO, "client from %s:%u",
+		    inet_ntoa(sin.sin_addr), be16toh(sin.sin_port));
 
 		nyfe_zeroize_register(&client, sizeof(client));
 		server_client_handle(&client, &sin, root, argv);
