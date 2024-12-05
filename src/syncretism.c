@@ -30,6 +30,7 @@
 static void		signal_trap(int);
 static void		signal_hdlr(int);
 static void		signal_memfault(int);
+static void		usage(const char *) __attribute__((noreturn));
 
 /* Last received signal. */
 volatile sig_atomic_t	sig_recv = -1;
@@ -39,6 +40,45 @@ static int		foreground = 1;
 
 /* The path to the key file that is to be used. */
 static const char	*keypath = NULL;
+
+/* Syncretism version info from obj/version.c. */
+extern const char	*syncretism_build_rev;
+extern const char	*syncretism_build_date;
+
+static void
+usage(const char *reason)
+{
+	if (reason != NULL)
+		printf("%s\n", reason);
+
+	printf("Usage:\n");
+	printf("  syncretism -s [options] [ip:port] [remote]\n");
+	printf("  syncretism -c [options] [ip:port] [remote] [local]\n");
+	printf("\n");
+	printf("Options\n");
+	printf("  -c       Run as a client\n");
+	printf("  -s       Run as a server\n");
+	printf("  -k       Absolute path to the shared secret\n");
+	printf("  -v       Print version information\n");
+
+	printf("\n");
+	printf("On the client side specify both the remote and local\n");
+	printf("directories. For example, syncing the remote directory\n");
+	printf("/home/cathedral to a local directory called backup-231021:\n");
+	printf("\n");
+	printf("  $ syncretism -c [options] 1.1.1.1:9191 "
+	    "/home/cathedral backup-231021\n");
+	printf("\n");
+	printf("On the server side specify the root directory for all\n");
+	printf("requests. The server will restrict clients from requesting\n");
+	printf("file paths outside of the given root directory. For example\n");
+	printf("serving /home/cathedral to all clients:\n");
+	printf("\n");
+	printf("  $ syncretism -s [options] 1.1.1.1:9191 /home/cathedral\n");
+	printf("\n");
+
+	exit(0);
+}
 
 int
 main(int argc, char *argv[])
@@ -51,7 +91,7 @@ main(int argc, char *argv[])
 	ip = NULL;
 	client = -1;
 
-	while ((ch = getopt(argc, argv, "cdi:k:p:s")) != -1) {
+	while ((ch = getopt(argc, argv, "cdhi:k:p:sv")) != -1) {
 		switch (ch) {
 		case 'c':
 			client = 1;
@@ -72,6 +112,13 @@ main(int argc, char *argv[])
 		case 's':
 			client = 0;
 			break;
+		case 'v':
+			printf("syncretism %s %s\n", syncretism_build_rev,
+			     syncretism_build_date);
+			exit(0);
+		case 'h':
+		default:
+			usage(NULL);
 		}
 	}
 
@@ -79,22 +126,22 @@ main(int argc, char *argv[])
 	argv += optind;
 
 	if (client == -1)
-		fatal("no server (-s) or client (-c) specified");
+		usage("no server (-s) or client (-c) specified");
 
 	if (keypath == NULL)
-		fatal("no key path (-k) has been set");
+		usage("no key path (-k) has been set");
 
 	if (ip == NULL)
-		fatal("no ip (-i) has been set");
+		usage("no ip (-i) has been set");
 
 	if (client == 0 && port == 0)
-		fatal("no port (-p) has been set");
+		usage("no port (-p) has been set");
 
 	if (client == 1 && argc != 2)
-		fatal("please specify remote and local directories");
+		usage("please specify remote and local directories");
 
 	if (client == 0 && argc != 1)
-		fatal("server requires a single root directory");
+		usage("server requires a single root directory");
 
 	if (foreground == 0)
 		openlog("syncretism", LOG_NDELAY | LOG_PID, LOG_DAEMON);
