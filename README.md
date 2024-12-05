@@ -101,7 +101,7 @@ as messages using the CreateMsg() pseudo-code described above.
 1) The client now creates a list of all files under its local directory.
    For each file it will calculate a SHA3-256 digest over the file.
 
-2) The client sends this files information to the server side so that
+2) The client sends all file information to the server side so that
    the server knows the state of the client its local directory.
 
 3) The server now creates a list of all files under its directory.
