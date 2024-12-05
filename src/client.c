@@ -21,6 +21,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -32,6 +33,9 @@ static void	client_send_random(struct conn *);
 static void	client_recv_random(struct conn *);
 static void	client_send_files(struct conn *, const char *);
 static void	client_recv_files(struct conn *, const char *);
+
+/* How many files we received. */
+static u_int64_t	file_count = 0;
 
 /*
  * Perform the syncretism as the client.
@@ -72,6 +76,8 @@ syncretism_client(const char *ip, u_int16_t port, char *remote, char *local)
 	if (connect(client.fd, (struct sockaddr *)&sin, sizeof(sin)) == -1)
 		fatal("failed to connect to %s:%u: %s", ip, port, errno_s);
 
+	printf("syncretism %s:%u:%s -> %s\n", ip, port, remote, local);
+
 	client_send_random(&client);
 	client_recv_random(&client);
 
@@ -83,6 +89,9 @@ syncretism_client(const char *ip, u_int16_t port, char *remote, char *local)
 	client_recv_files(&client, local);
 
 	nyfe_zeroize(&client, sizeof(client));
+
+	printf("syncretism ritual complete\n");
+	printf("   %" PRIu64 " created/updated files\n", file_count);
 }
 
 /*
@@ -176,6 +185,8 @@ client_recv_files(struct conn *c, const char *local)
 
 		if (strstr(path, "../"))
 			fatal("received malicous path from server");
+
+		file_count++;
 
 		syncretism_file_recv(c, path, sz);
 		syncretism_log(LOG_NOTICE, "%s/%s (%zu)", local, path, sz);

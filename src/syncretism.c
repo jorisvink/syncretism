@@ -35,6 +35,9 @@ static void		usage(const char *) __attribute__((noreturn));
 /* Last received signal. */
 volatile sig_atomic_t	sig_recv = -1;
 
+/* Running as client or server? */
+static int		client = -1;
+
 /* For server mode, we can daemonize if we want too. */
 static int		foreground = 1;
 
@@ -83,12 +86,10 @@ usage(const char *reason)
 int
 main(int argc, char *argv[])
 {
+	int			ch;
 	const char		*ip;
 	u_int16_t		port;
 	char			*p, *ep;
-	int			ch, client;
-
-	client = -1;
 
 	while ((ch = getopt(argc, argv, "cdhk:sv")) != -1) {
 		switch (ch) {
@@ -322,7 +323,8 @@ void
 syncretism_logv(int prio, const char *fmt, va_list args)
 {
 	if (foreground) {
-		printf("[%d] ", getpid());
+		if (client == 0)
+			printf("[%d] ", getpid());
 		vprintf(fmt, args);
 		printf("\n");
 	} else {
