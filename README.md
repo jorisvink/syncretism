@@ -84,13 +84,14 @@ CreateMsg(data):
     K' = c_encap if client else s_encap
 
     nonce = c_nonce if client else s_nonce
-    nonce = nonce + 1
 
     length = len(data) - 32-bit (network byte order)
     encrypted_length = Agelas_Encrypt(K', length)
 
     ct, tag = Agelas(K, nonce || data, aad=encrypted_length || nonce)
     msg = encrypted_length || ct || tag
+
+    nonce = nonce + 1
 
     return msg
 ```
