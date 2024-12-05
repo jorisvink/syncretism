@@ -73,6 +73,9 @@ Client                                        Server
 
    proof-of-key       ------>   accept or deny proof-of-key
  CreateMsg(s_token)
+
+     msg              <----->             msg
+ CreateMsg(..)                        CreateMsg(..)
 ```
 
 ```
