@@ -56,6 +56,9 @@ syncretism_server(const char *ip, u_int16_t port, char *root)
 
 	syncretism_slash_strip(root);
 
+	if (root[0] != '/')
+		fatal("root directory must be an absolute path");
+
 	if (chdir(root) == -1)
 		fatal("chdir(%s): %s", root, errno_s);
 
