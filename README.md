@@ -7,7 +7,7 @@ Its code-base is small, reviewable and written with extreme care.
 
 ## Usage
 
-```shell
+```txt
 Usage:
   syncretism -s [options] [ip:port] [remote]
   syncretism -c [options] [ip:port] [remote] [local]
