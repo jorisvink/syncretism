@@ -232,7 +232,12 @@ syncretism_read(int fd, void *data, size_t len)
 			if (errno == EINTR)
 				continue;
 
-			syncretism_log(LOG_INFO, "read: %s", errno_s);
+			if (errno == EWOULDBLOCK || errno == EAGAIN) {
+				syncretism_log(LOG_NOTICE, "read timeout");
+			} else {
+				syncretism_log(LOG_INFO, "read: %s", errno_s);
+			}
+
 			return (-1);
 		}
 
