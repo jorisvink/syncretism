@@ -11,7 +11,8 @@ Haven't you heard of rsync? Yup and I've used it for around 20 years,
 but I had a use-case for this which finally gave me an excuse to
 shut up and hack.
 
-What about the cryptography used here? It's probably a little broken
+What about the cryptography used here? All of it is based Keccak-f, including
+the AEAD cipher used (Agelas from Nyfe). It's probably a little broken
 and you shouldn't use it.
 
 Wait, then why does this exist? ... :-)
