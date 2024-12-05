@@ -80,9 +80,22 @@ CreateMsg(data):
     return msg
 ```
 
-Once the secure channel is established the client begins by sending
-its view of the local directory.
+Once the secure channel is established all communication is sent
+as messages using the CreateMsg() pseudo-code described above.
 
-Once the client indicates it has sent all files, the server will
-look at its view of its directory and send the client missing or
-out-dated files.
+1) The client now creates a list of all files under its local directory.
+   For each file it will calculate a SHA3-256 digest over the file.
+
+2) The client sends this files information to the server side so that
+   the server knows the state of the client its local directory.
+
+3) The server now creates a list of all files under its directory.
+   For each file it will calculate a SHA3-256 digest over the file.
+
+4) The server creates a list of files that must be sent to the client
+   by looking at what files are missing or which files their SHA3-256
+   digest mismatches.
+
+5) The server sends the missing or updated files to the client.
+
+6) Both parties are now happy.
