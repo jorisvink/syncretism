@@ -35,7 +35,7 @@ syncretism_msg_pack(struct conn *c, const void *data, size_t len)
 	u_int32_t		length, pktlen;
 
 	PRECOND(data != NULL);
-	PRECOND(len < SYNCRETISM_MAX_MSG_LEN);
+	PRECOND(len <= SYNCRETISM_MAX_MSG_LEN);
 
 	if ((msg = calloc(1, sizeof(*msg))) == NULL)
 		fatal("calloc: failed to allocate msg");
@@ -89,8 +89,8 @@ syncretism_msg_unpack(struct conn *c, struct msg *msg)
 
 	PRECOND(c != NULL);
 	PRECOND(msg != NULL);
-	PRECOND(msg->length >= SYNCRETISM_TAG_LEN &&
-	    msg->length < SYNCRETISM_MAX_MSG_LEN);
+	PRECOND(msg->length >= SYNCRETISM_TAG_LEN && msg->length <=
+	    sizeof(length) + SYNCRETISM_MAX_MSG_LEN + sizeof(calc));
 
 	msg->length -= sizeof(calc);
 	tag = &msg->data[msg->length];
@@ -148,7 +148,7 @@ syncretism_msg_send(struct conn *c, const void *buf, size_t buflen)
 
 	PRECOND(c != NULL);
 	PRECOND(buf != NULL);
-	PRECOND(buflen < SYNCRETISM_MAX_MSG_LEN);
+	PRECOND(buflen <= SYNCRETISM_MAX_MSG_LEN);
 
 	msg = syncretism_msg_pack(c, buf, buflen);
 
@@ -180,7 +180,8 @@ syncretism_msg_read(struct conn *c)
 	nyfe_agelas_decrypt(&c->rx_encap, &len, &len, sizeof(len));
 
 	len = be32toh(len);
-	if (len < SYNCRETISM_TAG_LEN || len > SYNCRETISM_MAX_MSG_LEN) {
+	if (len < SYNCRETISM_TAG_LEN ||
+	    len > sizeof(len) + SYNCRETISM_MAX_MSG_LEN + SYNCRETISM_TAG_LEN) {
 		syncretism_log(LOG_NOTICE, "received weird length (%u)", len);
 		return (NULL);
 	}
@@ -212,6 +213,7 @@ syncretism_msg_read(struct conn *c)
 char *
 syncretism_msg_read_string(struct conn *c)
 {
+	size_t		idx;
 	char		*str;
 	struct msg	*msg;
 
@@ -223,8 +225,18 @@ syncretism_msg_read_string(struct conn *c)
 	if ((str = calloc(1, msg->length + 1)) == NULL)
 		fatal("calloc");
 
-	memcpy(str, msg->data, msg->length);
-	str[msg->length] = '\0';
+	for (idx = 0; idx < msg->length; idx++) {
+		if (msg->data[idx] == '\0') {
+			syncretism_log(LOG_NOTICE,
+			    "expected string has embedded NUL-byte");
+			syncretism_msg_free(msg);
+			return (NULL);
+		}
+
+		str[idx] = msg->data[idx];
+	}
+
+	str[idx] = '\0';
 
 	syncretism_msg_free(msg);
 

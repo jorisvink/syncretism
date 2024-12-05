@@ -46,8 +46,6 @@
 struct file {
 	char			*path;
 	u_int64_t		size;
-	int			seen;
-	int			differ;
 	char			digest[65];
 	TAILQ_ENTRY(file)	list;
 };
@@ -120,7 +118,7 @@ int	syncretism_file_entry_recv(struct conn *, char **,
 	    char **, u_int64_t *);
 int	syncretism_file_list_add(struct file_list *,
 	    const char *, const char *);
-void	syncretism_file_list_diff(struct file_list *, struct file_list *,
+void	syncretism_file_list_diff(struct file_list *,
 	    struct file_list *, struct file_list *);
 
 /* src/server.c */

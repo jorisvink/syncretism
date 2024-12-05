@@ -139,19 +139,23 @@ syncretism_file_list_add(struct file_list *list, const char *path,
  */
 void
 syncretism_file_list_diff(struct file_list *ours, struct file_list *theirs,
-    struct file_list *update, struct file_list *remove)
+    struct file_list *update)
 {
 	struct file		*a, *an, *b, *bn;
 
 	PRECOND(ours != NULL);
 	PRECOND(theirs != NULL);
 	PRECOND(update != NULL);
-	PRECOND(remove != NULL);
 
 	TAILQ_INIT(update);
-	TAILQ_INIT(remove);
 
-	/* Determine which files exist on both sides. */
+	/*
+	 * Determine status on items in the lists.
+	 *
+	 * When this is done the following holds:
+	 *	- Remaining entries in theirs are to be removed client side.
+	 *	- Remaining entries in ours need updating.
+	 */
 	for (a = TAILQ_FIRST(theirs); a != NULL; a = an) {
 		an = TAILQ_NEXT(a, list);
 
@@ -162,11 +166,7 @@ syncretism_file_list_diff(struct file_list *ours, struct file_list *theirs,
 				TAILQ_REMOVE(theirs, a, list);
 				TAILQ_REMOVE(ours, b, list);
 
-				a->seen = 1;
-				b->seen = 1;
-
 				if (strcmp(a->digest, b->digest)) {
-					b->differ = 1;
 					TAILQ_INSERT_TAIL(update, b, list);
 				} else {
 					free(b->path);
@@ -179,28 +179,6 @@ syncretism_file_list_diff(struct file_list *ours, struct file_list *theirs,
 				break;
 			}
 		}
-	}
-
-	/* Remaining theirs entries are now things to be removed. */
-	for (a = TAILQ_FIRST(theirs); a != NULL; a = an) {
-		an = TAILQ_NEXT(a, list);
-
-		if (a->seen != 0)
-			fatal("found %s where seen != 0 but on list", a->path);
-
-		TAILQ_REMOVE(theirs, a, list);
-		TAILQ_INSERT_TAIL(remove, a, list);
-	}
-
-	/* Remaining our entries are things that also need updates. */
-	for (b = TAILQ_FIRST(ours); b != NULL; b = bn) {
-		bn = TAILQ_NEXT(b, list);
-
-		if (b->seen != 0)
-			fatal("found %s where seen != 0 but on list", a->path);
-
-		TAILQ_REMOVE(ours, b, list);
-		TAILQ_INSERT_TAIL(update, b, list);
 	}
 }
 
@@ -507,7 +485,7 @@ syncretism_file_recv(struct conn *c, char *path, u_int64_t sz)
 	}
 
 	ret = 0;
-	syncretism_log(LOG_NOTICE, "wrote %s (%zu)", path, total);
+	syncretism_log(LOG_NOTICE, "%s (%zu)", path, total);
 
 cleanup:
 	if (fd != -1)

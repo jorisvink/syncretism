@@ -107,7 +107,7 @@ server_client_handle(struct conn *c, struct sockaddr_in *sin,
 	struct file		*file;
 	size_t			rootlen;
 	char			*path, *digest;
-	struct file_list	ours, theirs, update, remove;
+	struct file_list	ours, theirs, update;
 
 	PRECOND(c != NULL);
 	PRECOND(sin != NULL);
@@ -123,7 +123,6 @@ server_client_handle(struct conn *c, struct sockaddr_in *sin,
 	TAILQ_INIT(&ours);
 	TAILQ_INIT(&theirs);
 	TAILQ_INIT(&update);
-	TAILQ_INIT(&remove);
 
 	rootlen = strlen(root);
 
@@ -161,7 +160,10 @@ server_client_handle(struct conn *c, struct sockaddr_in *sin,
 	}
 
 	syncretism_file_list(&ours, pathv);
-	syncretism_file_list_diff(&ours, &theirs, &update, &remove);
+	syncretism_file_list_diff(&ours, &theirs, &update);
+
+	TAILQ_FOREACH(file, &ours, list)
+		syncretism_file_send(c, file);
 
 	TAILQ_FOREACH(file, &update, list)
 		syncretism_file_send(c, file);
@@ -180,7 +182,6 @@ cleanup:
 	syncretism_file_list_free(&ours);
 	syncretism_file_list_free(&theirs);
 	syncretism_file_list_free(&update);
-	syncretism_file_list_free(&remove);
 }
 
 /*
