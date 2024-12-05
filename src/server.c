@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <signal.h>
 #include <time.h>
 
 #include "syncretism.h"
@@ -33,24 +34,26 @@ static int	server_client_auth(struct conn *);
 static int	server_perform_handshake(struct conn *);
 
 static void	server_client_handle(struct conn *,
-		    struct sockaddr_in *, const char *, char **);
+		    struct sockaddr_in *, char *);
 
 /*
  * Bind to the given ip:port and handle incoming connections from our peer.
  */
 void
-syncretism_server(const char *ip, u_int16_t port, const char *root, char **argv)
+syncretism_server(const char *ip, u_int16_t port, char *root)
 {
 	struct timeval		tv;
 	struct sockaddr_in	sin;
 	struct conn		client;
 	socklen_t		sinlen;
-	int			fd, on;
+	int			fd, on, sig;
 
 	PRECOND(ip != NULL);
 	PRECOND(port > 0);
 	PRECOND(root != NULL);
-	PRECOND(argv != NULL);
+
+	(void)signal(SIGPIPE, SIG_IGN);
+	syncretism_slash_strip(root);
 
 	if ((fd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
 		fatal("socket: %s", errno_s);
@@ -72,6 +75,17 @@ syncretism_server(const char *ip, u_int16_t port, const char *root, char **argv)
 		fatal("listen: %s", errno_s);
 
 	for (;;) {
+		if (chdir(root) == -1) {
+			fatal("failed to change directory to %s: %s",
+			    root, errno_s);
+		}
+
+		if ((sig = syncretism_last_signal()) != -1) {
+			syncretism_log(LOG_NOTICE,
+			    "interrupted by signal %d", sig);
+			break;
+		}
+
 		sinlen = sizeof(sin);
 		memset(&client, 0, sizeof(client));
 
@@ -90,9 +104,15 @@ syncretism_server(const char *ip, u_int16_t port, const char *root, char **argv)
 		    inet_ntoa(sin.sin_addr), be16toh(sin.sin_port));
 
 		nyfe_zeroize_register(&client, sizeof(client));
-		server_client_handle(&client, &sin, root, argv);
-		nyfe_zeroize(&client, sizeof(client));
 
+		if (server_perform_handshake(&client) == -1) {
+			syncretism_log(LOG_INFO, "handshake failed with %s:%u",
+			    inet_ntoa(sin.sin_addr), be16toh(sin.sin_port));
+		} else {
+			server_client_handle(&client, &sin, root);
+		}
+
+		nyfe_zeroize(&client, sizeof(client));
 		close(client.fd);
 	}
 }
@@ -101,9 +121,9 @@ syncretism_server(const char *ip, u_int16_t port, const char *root, char **argv)
  * Handle a handshake with a client and then incoming messages.
  */
 static void
-server_client_handle(struct conn *c, struct sockaddr_in *sin,
-    const char *root, char **pathv)
+server_client_handle(struct conn *c, struct sockaddr_in *sin, char *root)
 {
+	int			sig;
 	struct file		*file;
 	size_t			rootlen;
 	char			*path, *digest;
@@ -112,23 +132,47 @@ server_client_handle(struct conn *c, struct sockaddr_in *sin,
 	PRECOND(c != NULL);
 	PRECOND(sin != NULL);
 	PRECOND(root != NULL);
-	PRECOND(pathv != NULL);
 
-	if (server_perform_handshake(c) == -1) {
-		syncretism_log(LOG_INFO, "handshake failed with %s:%u",
-		    inet_ntoa(sin->sin_addr), be16toh(sin->sin_port));
-		return;
-	}
+	path = NULL;
+	digest = NULL;
+	rootlen = strlen(root);
 
 	TAILQ_INIT(&ours);
 	TAILQ_INIT(&theirs);
 	TAILQ_INIT(&update);
 
-	rootlen = strlen(root);
+	if ((path = syncretism_msg_read_string(c)) == NULL) {
+		syncretism_log(LOG_NOTICE,
+		    "unexpected disconnect from %s:%u",
+		    inet_ntoa(sin->sin_addr), be16toh(sin->sin_port));
+		goto cleanup;
+	}
+
+	if (strncmp(path, root, rootlen) || strstr(path, "../")) {
+		syncretism_log(LOG_NOTICE,
+		    "requested path outside of root from %s:%u",
+		    inet_ntoa(sin->sin_addr), be16toh(sin->sin_port));
+		goto cleanup;
+	}
+
+	if (chdir(path) == -1) {
+		syncretism_log(LOG_NOTICE,
+		    "failed to chdir to %s for %s:%u (%s)", path,
+		    inet_ntoa(sin->sin_addr), be16toh(sin->sin_port), errno_s);
+		goto cleanup;
+	}
+
+	free(path);
 
 	for (;;) {
 		path = NULL;
 		digest = NULL;
+
+		if ((sig = syncretism_last_signal()) != -1) {
+			syncretism_log(LOG_NOTICE,
+			    "interrupted by signal %d", sig);
+			goto cleanup;
+		}
 
 		if (syncretism_file_entry_recv(c, &path, &digest, NULL) == -1) {
 			syncretism_log(LOG_NOTICE,
@@ -146,27 +190,36 @@ server_client_handle(struct conn *c, struct sockaddr_in *sin,
 			goto cleanup;
 		}
 
-		if (strncmp(path, root, rootlen)) {
-			syncretism_log(LOG_NOTICE,
-			    "path outside root from %s:%u",
-			    inet_ntoa(sin->sin_addr), be16toh(sin->sin_port));
-			goto cleanup;
-		}
-
 		syncretism_file_list_add(&theirs, path, digest);
 
 		free(path);
 		free(digest);
 	}
 
-	syncretism_file_list(&ours, pathv);
+	syncretism_file_list(&ours);
 	syncretism_file_list_diff(&ours, &theirs, &update);
 
-	TAILQ_FOREACH(file, &ours, list)
-		syncretism_file_send(c, file);
+	TAILQ_FOREACH(file, &ours, list) {
+		if ((sig = syncretism_last_signal()) != -1) {
+			syncretism_log(LOG_NOTICE,
+			    "interrupted by signal %d", sig);
+			goto cleanup;
+		}
 
-	TAILQ_FOREACH(file, &update, list)
-		syncretism_file_send(c, file);
+		if (syncretism_file_send(c, file) == -1)
+			goto cleanup;
+	}
+
+	TAILQ_FOREACH(file, &update, list) {
+		if ((sig = syncretism_last_signal()) != -1) {
+			syncretism_log(LOG_NOTICE,
+			    "interrupted by signal %d", sig);
+			goto cleanup;
+		}
+
+		if (syncretism_file_send(c, file) == -1)
+			goto cleanup;
+	}
 
 	if (syncretism_file_done(c) == -1) {
 		syncretism_log(LOG_NOTICE,

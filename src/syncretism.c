@@ -19,12 +19,20 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
 #include <unistd.h>
 
 #include "syncretism.h"
 
 /* The label used for KMAC256() when deriving keys. */
 #define SYNCRETISM_LABEL		"SYNCRETISM.KDF"
+
+static void		signal_trap(int);
+static void		signal_hdlr(int);
+static void		signal_memfault(int);
+
+/* Last received signal. */
+volatile sig_atomic_t	sig_recv = -1;
 
 /* For server mode, we can daemonize if we want too. */
 static int		foreground = 1;
@@ -35,17 +43,15 @@ static const char	*keypath = NULL;
 int
 main(int argc, char *argv[])
 {
+	const char		*ip;
 	u_int16_t		port;
-	size_t			rootlen;
-	const char		*ip, *root;
-	int			ch, client, idx;
+	int			ch, client;
 
 	port = 0;
 	ip = NULL;
-	root = NULL;
 	client = -1;
 
-	while ((ch = getopt(argc, argv, "cdi:k:p:r:s")) != -1) {
+	while ((ch = getopt(argc, argv, "cdi:k:p:s")) != -1) {
 		switch (ch) {
 		case 'c':
 			client = 1;
@@ -62,9 +68,6 @@ main(int argc, char *argv[])
 		case 'p':
 			/* XXX */
 			port = atoi(optarg);
-			break;
-		case 'r':
-			root = optarg;
 			break;
 		case 's':
 			client = 0;
@@ -84,30 +87,31 @@ main(int argc, char *argv[])
 	if (ip == NULL)
 		fatal("no ip (-i) has been set");
 
-	if (root == NULL)
-		fatal("no root path (-r) has been set");
-
 	if (client == 0 && port == 0)
 		fatal("no port (-p) has been set");
 
-	if (argc == 0)
-		fatal("no paths given");
+	if (client == 1 && argc != 2)
+		fatal("please specify remote and local directories");
+
+	if (client == 0 && argc != 1)
+		fatal("server requires a single root directory");
 
 	if (foreground == 0)
 		openlog("syncretism", LOG_NDELAY | LOG_PID, LOG_DAEMON);
 
-	rootlen = strlen(root);
-	for (idx = 0; idx < argc; idx++) {
-		if (strncmp(argv[idx], root, rootlen))
-			fatal("%s not a path under given root", argv[idx]);
-	}
+	signal_trap(SIGINT);
+	signal_trap(SIGHUP);
+	signal_trap(SIGCHLD);
+	signal_trap(SIGQUIT);
+	signal_trap(SIGTERM);
+	signal_trap(SIGSEGV);
 
 	nyfe_random_init();
 
 	if (client) {
-		syncretism_client(ip, port, root, argv);
+		syncretism_client(ip, port, argv[0], argv[1]);
 	} else {
-		syncretism_server(ip, port, root, argv);
+		syncretism_server(ip, port, argv[0]);
 	}
 
 	return (0);
@@ -252,6 +256,24 @@ syncretism_read(int fd, void *data, size_t len)
 }
 
 /*
+ * Strip any potential trailing slashes from given path.
+ */
+void
+syncretism_slash_strip(char *path)
+{
+	size_t		len;
+
+	PRECOND(path != NULL);
+
+	len = strlen(path);
+
+	while (len > 0 && path[len - 1] == '/') {
+		len--;
+		path[len] = '\0';
+	}
+}
+
+/*
  * Log a thing to tty or syslog.
  */
 void
@@ -279,6 +301,20 @@ syncretism_logv(int prio, const char *fmt, va_list args)
 }
 
 /*
+ * Returns the last received signal to the caller and resets sig_recv.
+ */
+int
+syncretism_last_signal(void)
+{
+	int	sig;
+
+	sig = sig_recv;
+	sig_recv = -1;
+
+	return (sig);
+}
+
+/*
  * Something went very wrong and we need to abort.
  */
 void
@@ -293,4 +329,47 @@ fatal(const char *fmt, ...)
 	va_end(args);
 
 	exit(1);
+}
+
+/*
+ * Let the given signal be caught by our signal handler.
+ */
+static void
+signal_trap(int sig)
+{
+	struct sigaction	sa;
+
+	memset(&sa, 0, sizeof(sa));
+
+	if (sig == SIGSEGV)
+		sa.sa_handler = signal_memfault;
+	else
+		sa.sa_handler = signal_hdlr;
+
+	if (sigfillset(&sa.sa_mask) == -1)
+		fatal("sigfillset: %s", errno_s);
+
+	if (sigaction(sig, &sa, NULL) == -1)
+		fatal("sigaction: %s", errno_s);
+}
+
+/*
+ * Our signal handler, doesn't do much more than set sig_recv so it can
+ * be obtained by syncretism_last_signal().
+ */
+static void
+signal_hdlr(int sig)
+{
+	sig_recv = sig;
+}
+
+/*
+ * The signal handler for when a segmentation fault occurred, we are
+ * catching this so we can just cleanup before dying.
+ */
+static void
+signal_memfault(int sig)
+{
+	nyfe_zeroize_all();
+	abort();
 }

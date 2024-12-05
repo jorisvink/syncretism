@@ -16,6 +16,7 @@
 
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -29,22 +30,31 @@
 static int	client_send_auth(struct conn *);
 static int	client_send_random(struct conn *);
 static int	client_recv_random(struct conn *);
-static int	client_send_files(struct conn *, char **);
+static int	client_send_files(struct conn *, const char *);
 static int	client_recv_files(struct conn *, const char *);
 
 /*
  * Perform the syncretism as the client.
  */
 void
-syncretism_client(const char *ip, u_int16_t port, const char *root, char **argv)
+syncretism_client(const char *ip, u_int16_t port, char *remote, char *local)
 {
 	struct sockaddr_in	sin;
 	struct conn		client;
 
 	PRECOND(ip != NULL);
 	PRECOND(port > 0);
-	PRECOND(root != NULL);
-	PRECOND(argv != NULL);
+	PRECOND(remote != NULL);
+	PRECOND(local != NULL);
+
+	syncretism_slash_strip(local);
+	syncretism_slash_strip(remote);
+
+	if (mkdir(local, 0700) == -1 && errno != EEXIST)
+		fatal("failed to create %s: %s", local, errno_s);
+
+	if (chdir(local) == -1)
+		fatal("failed to change directory to %s: %s", local, errno_s);
 
 	memset(&client, 0, sizeof(client));
 
@@ -75,10 +85,10 @@ syncretism_client(const char *ip, u_int16_t port, const char *root, char **argv)
 	if (client_send_auth(&client) == -1)
 		fatal("failed to authenticate");
 
-	if (client_send_files(&client, argv) == -1)
+	if (client_send_files(&client, remote) == -1)
 		fatal("failed to send our list of files");
 
-	if (client_recv_files(&client, root) == -1)
+	if (client_recv_files(&client, local) == -1)
 		fatal("failed to receive server files");
 
 	nyfe_zeroize(&client, sizeof(client));
@@ -137,23 +147,28 @@ client_send_auth(struct conn *c)
  * them over to the server side so it can tell us what we need to do.
  */
 static int
-client_send_files(struct conn *c, char **pathv)
+client_send_files(struct conn *c, const char *remote)
 {
-	int			ret;
 	struct file		*file;
 	struct file_list	files;
+	int			ret, sig;
 
 	PRECOND(c != NULL);
-	PRECOND(pathv != NULL);
 
 	ret = -1;
 
-	if (syncretism_file_list(&files, pathv) == -1) {
+	if (syncretism_msg_send(c, remote, strlen(remote)) == -1)
+		return (-1);
+
+	if (syncretism_file_list(&files) == -1) {
 		syncretism_file_list_free(&files);
 		return (-1);
 	}
 
 	TAILQ_FOREACH(file, &files, list) {
+		if ((sig = syncretism_last_signal()) != -1)
+			fatal("interrupted by signal %d", sig);
+
 		if (syncretism_file_entry_send(c, file) == -1)
 			break;
 	}
@@ -172,22 +187,22 @@ client_send_files(struct conn *c, char **pathv)
  * Receive files from the server that we shall store.
  */
 static int
-client_recv_files(struct conn *c, const char *root)
+client_recv_files(struct conn *c, const char *local)
 {
 	u_int64_t		sz;
-	int			ret;
-	size_t			rootlen;
+	int			ret, sig;
 	char			*path, *digest;
 
 	PRECOND(c != NULL);
-	PRECOND(root != NULL);
 
 	ret = -1;
-	rootlen = strlen(root);
 
 	for (;;) {
 		path = NULL;
 		digest = NULL;
+
+		if ((sig = syncretism_last_signal()) != -1)
+			fatal("interrupted by signal %d", sig);
 
 		if (syncretism_file_entry_recv(c, &path, &digest, &sz) == -1) {
 			syncretism_log(LOG_NOTICE,
@@ -203,17 +218,13 @@ client_recv_files(struct conn *c, const char *root)
 			goto cleanup;
 		}
 
-		if (strncmp(path, root, rootlen)) {
-			syncretism_log(LOG_NOTICE,
-			    "path outside root from server");
-			goto cleanup;
-		}
-
 		if (syncretism_file_recv(c, path, sz) == -1) {
 			syncretism_log(LOG_NOTICE,
 			    "failed to receive %s", path);
 			goto cleanup;
 		}
+
+		syncretism_log(LOG_NOTICE, "%s/%s (%zu)", local, path, sz);
 
 		free(path);
 		free(digest);

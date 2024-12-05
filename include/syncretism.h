@@ -26,6 +26,16 @@
 
 #include "libnyfe.h"
 
+#if defined(__APPLE__)
+#include <libkern/OSByteOrder.h>
+#define htobe16(x)		OSSwapHostToBigInt16(x)
+#define htobe32(x)		OSSwapHostToBigInt32(x)
+#define htobe64(x)		OSSwapHostToBigInt64(x)
+#define be16toh(x)		OSSwapBigToHostInt16(x)
+#define be32toh(x)		OSSwapBigToHostInt32(x)
+#define be64toh(x)		OSSwapBigToHostInt64(x)
+#endif
+
 /* Makes life easier. */
 #define errno_s			strerror(errno)
 
@@ -96,7 +106,10 @@ struct msg {
 };
 
 /* src/syncretism.c */
+int	syncretism_last_signal(void);
 void	fatal(const char *, ...) __attribute__((noreturn));
+
+void	syncretism_slash_strip(char *);
 int	syncretism_read(int, void *, size_t);
 void	syncretism_log(int, const char *, ...);
 int	syncretism_write(int, const void *, size_t);
@@ -105,12 +118,12 @@ int	syncretism_derive_keys(struct conn *, struct key *, struct key *,
 	    struct nyfe_agelas *, struct nyfe_agelas *);
 
 /* src/client.c */
-void	syncretism_client(const char *, u_int16_t, const char *, char **);
+void	syncretism_client(const char *, u_int16_t, char *, char *);
 
 /* src/file.c */
 int	syncretism_file_done(struct conn *);
+int	syncretism_file_list(struct file_list *);
 void	syncretism_file_list_free(struct file_list *);
-int	syncretism_file_list(struct file_list *, char **);
 int	syncretism_file_send(struct conn *, struct file *);
 int	syncretism_file_save(char *, const void *, size_t);
 int	syncretism_file_recv(struct conn *, char *, u_int64_t);
@@ -123,7 +136,7 @@ void	syncretism_file_list_diff(struct file_list *,
 	    struct file_list *, struct file_list *);
 
 /* src/server.c */
-void	syncretism_server(const char *, u_int16_t, const char *, char **);
+void	syncretism_server(const char *, u_int16_t, char *);
 
 /* src/msg.c */
 void		syncretism_msg_free(struct msg *);

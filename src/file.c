@@ -34,17 +34,21 @@ static int	file_sha3sum(struct file *);
 static int	file_cmp(const FTSENT **, const FTSENT **);
 
 /*
- * Load all files under the given paths into list.
+ * Create a list of all files under the parent working directory (".").
  */
 int
-syncretism_file_list(struct file_list *list, char **pathv)
+syncretism_file_list(struct file_list *list)
 {
 	FTS			*fts;
 	FTSENT			*ent;
 	struct file		*file;
+	char			*pathv[2];
 
 	PRECOND(list != NULL);
 	PRECOND(pathv != NULL);
+
+	pathv[0] = ".";
+	pathv[1] = NULL;
 
 	TAILQ_INIT(list);
 
@@ -61,7 +65,8 @@ syncretism_file_list(struct file_list *list, char **pathv)
 		if ((file = calloc(1, sizeof(*file))) == NULL)
 			fatal("calloc failed");
 
-		if ((file->path = strdup(ent->fts_accpath)) == NULL)
+		/* XXX - are we sure its always ./ ? */
+		if ((file->path = strdup(ent->fts_accpath + 2)) == NULL)
 			fatal("strdup failed");
 
 		if (file_sha3sum(file) == -1) {
@@ -291,12 +296,11 @@ syncretism_file_entry_recv(struct conn *c, char **path,
 		return (0);
 	}
 
-#if 0
 	if (p[0] == '\0' || p[0] == '/') {
-		syncretism_log(LOG_NOTICE, "file entry: a path is invalid");
+		syncretism_log(LOG_NOTICE,
+		    "file entry: path is potentially malicous");
 		goto cleanup;
 	}
-#endif
 
 	len = strlen(p);
 	for (idx = 0; idx < len; idx++) {
@@ -410,7 +414,6 @@ int
 syncretism_file_recv(struct conn *c, char *path, u_int64_t sz)
 {
 	struct msg	*msg;
-	u_int64_t	total;
 	int		ret, fd, len;
 	char		*p, tmp[1024];
 
@@ -449,8 +452,6 @@ syncretism_file_recv(struct conn *c, char *path, u_int64_t sz)
 		goto cleanup;
 	}
 
-	total = 0;
-
 	while (sz != 0) {
 		if ((msg = syncretism_msg_read(c)) == NULL) {
 			syncretism_log(LOG_NOTICE,
@@ -466,8 +467,6 @@ syncretism_file_recv(struct conn *c, char *path, u_int64_t sz)
 		}
 
 		sz -= msg->length;
-		total += msg->length;
-
 		syncretism_msg_free(msg);
 	}
 
@@ -485,7 +484,6 @@ syncretism_file_recv(struct conn *c, char *path, u_int64_t sz)
 	}
 
 	ret = 0;
-	syncretism_log(LOG_NOTICE, "%s (%zu)", path, total);
 
 cleanup:
 	if (fd != -1)
