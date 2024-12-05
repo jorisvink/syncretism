@@ -32,7 +32,7 @@
 #include "syncretism.h"
 
 static void	server_reap_children(void);
-static void	server_wait_and_fork(int, char *);
+static int	server_wait_and_fork(int, char *);
 
 static void	server_send_random(struct conn *);
 static void	server_recv_random(struct conn *);
@@ -81,15 +81,21 @@ syncretism_server(const char *ip, u_int16_t port, char *root)
 	if (listen(fd, 1) == -1)
 		fatal("listen: %s", errno_s);
 
-	for (;;)
-		server_wait_and_fork(fd, root);
+	syncretism_log(LOG_INFO, "started");
+
+	for (;;) {
+		if (server_wait_and_fork(fd, root) == -1)
+			break;
+	}
+
+	syncretism_log(LOG_INFO, "exiting");
 }
 
 /*
  * Accept a new client connection and setup a new child process for it.
  * Handles any reaping of kids too.
  */
-static void
+static int
 server_wait_and_fork(int fd, char *root)
 {
 	struct timeval		tv;
@@ -112,7 +118,10 @@ server_wait_and_fork(int fd, char *root)
 				server_reap_children();
 				continue;
 			}
-			fatal("interrupted by signal %d", sig);
+
+			syncretism_log(LOG_INFO,
+			    "interrupted by signal %d", sig);
+			return (-1);
 		}
 
 		if ((nfd = poll(&pfd, 1, 1000)) == -1) {
@@ -164,6 +173,8 @@ server_wait_and_fork(int fd, char *root)
 	    inet_ntoa(sin.sin_addr), be16toh(sin.sin_port), pid);
 
 	close(cfd);
+
+	return (0);
 }
 
 /*

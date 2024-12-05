@@ -17,6 +17,10 @@
 #ifndef __H_SYNCRETISM_H
 #define __H_SYNCRETISM_H
 
+#if defined(__APPLE__)
+#define daemon portability_is_king
+#endif
+
 #include <sys/queue.h>
 
 #include <errno.h>

@@ -61,6 +61,7 @@ usage(const char *reason)
 	printf("Options\n");
 	printf("  -c       Run as a client\n");
 	printf("  -s       Run as a server\n");
+	printf("  -d       Daemonize server\n");
 	printf("  -k       Absolute path to the shared secret\n");
 	printf("  -v       Print version information\n");
 
@@ -157,8 +158,14 @@ main(int argc, char *argv[])
 	nyfe_random_init();
 
 	if (client) {
+		if (foreground == 0)
+			printf("-d has no effect in client mode\n");
 		syncretism_client(ip, port, argv[1], argv[2]);
 	} else {
+		if (foreground == 0) {
+			if (daemon(1, 0) == -1)
+				fatal("daemon: %s", errno_s);
+		}
 		syncretism_server(ip, port, argv[1]);
 	}
 
