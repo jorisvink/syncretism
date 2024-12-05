@@ -27,11 +27,11 @@
 
 #include "syncretism.h"
 
-static int	client_send_auth(struct conn *);
-static int	client_send_random(struct conn *);
-static int	client_recv_random(struct conn *);
-static int	client_send_files(struct conn *, const char *);
-static int	client_recv_files(struct conn *, const char *);
+static void	client_send_auth(struct conn *);
+static void	client_send_random(struct conn *);
+static void	client_recv_random(struct conn *);
+static void	client_send_files(struct conn *, const char *);
+static void	client_recv_files(struct conn *, const char *);
 
 /*
  * Perform the syncretism as the client.
@@ -72,24 +72,15 @@ syncretism_client(const char *ip, u_int16_t port, char *remote, char *local)
 	if (connect(client.fd, (struct sockaddr *)&sin, sizeof(sin)) == -1)
 		fatal("failed to connect to %s:%u: %s", ip, port, errno_s);
 
-	if (client_send_random(&client) == -1)
-		fatal("failed to send our random data");
+	client_send_random(&client);
+	client_recv_random(&client);
 
-	if (client_recv_random(&client) == -1)
-		fatal("failed to receive server random data");
+	syncretism_derive_keys(&client, &client.tx, &client.rx,
+	    &client.tx_encap, &client.rx_encap);
 
-	if (syncretism_derive_keys(&client, &client.tx, &client.rx,
-	    &client.tx_encap, &client.rx_encap) == -1)
-		fatal("failed to derive keys");
-
-	if (client_send_auth(&client) == -1)
-		fatal("failed to authenticate");
-
-	if (client_send_files(&client, remote) == -1)
-		fatal("failed to send our list of files");
-
-	if (client_recv_files(&client, local) == -1)
-		fatal("failed to receive server files");
+	client_send_auth(&client);
+	client_send_files(&client, remote);
+	client_recv_files(&client, local);
 
 	nyfe_zeroize(&client, sizeof(client));
 }
@@ -97,36 +88,25 @@ syncretism_client(const char *ip, u_int16_t port, char *remote, char *local)
 /*
  * Send our random data to the server node.
  */
-static int
+static void
 client_send_random(struct conn *c)
 {
 	PRECOND(c != NULL);
 
 	nyfe_random_bytes(c->client_random, sizeof(c->client_random));
-
-	if (syncretism_write(c->fd,
-	    c->client_random, sizeof(c->client_random)) == -1)
-		return (-1);
-
-	return (0);
+	syncretism_write(c->fd, c->client_random, sizeof(c->client_random));
 }
 
 /*
  * Receive random data and challenge token from the server node.
  */
-static int
+static void
 client_recv_random(struct conn *c)
 {
 	PRECOND(c != NULL);
 
-	if (syncretism_read(c->fd,
-	    c->server_random, sizeof(c->server_random)) == -1)
-		return (-1);
-
-	if (syncretism_read(c->fd, c->token, sizeof(c->token)) == -1)
-		return (-1);
-
-	return (0);
+	syncretism_read(c->fd, c->server_random, sizeof(c->server_random));
+	syncretism_read(c->fd, c->token, sizeof(c->token));
 }
 
 /*
@@ -134,68 +114,53 @@ client_recv_random(struct conn *c)
  * and send it to the server as initial proof that we hold the
  * same shared secret.
  */
-static int
+static void
 client_send_auth(struct conn *c)
 {
 	PRECOND(c != NULL);
 
-	return (syncretism_msg_send(c, c->token, sizeof(c->token)));
+	syncretism_msg_send(c, c->token, sizeof(c->token));
 }
 
 /*
  * Collect all files under the given paths and send information about
  * them over to the server side so it can tell us what we need to do.
  */
-static int
+static void
 client_send_files(struct conn *c, const char *remote)
 {
+	int			sig;
 	struct file		*file;
 	struct file_list	files;
-	int			ret, sig;
 
 	PRECOND(c != NULL);
 
-	ret = -1;
-
-	if (syncretism_msg_send(c, remote, strlen(remote)) == -1)
-		return (-1);
-
-	if (syncretism_file_list(&files) == -1) {
-		syncretism_file_list_free(&files);
-		return (-1);
-	}
+	syncretism_msg_send(c, remote, strlen(remote));
+	syncretism_file_list(&files);
 
 	TAILQ_FOREACH(file, &files, list) {
 		if ((sig = syncretism_last_signal()) != -1)
 			fatal("interrupted by signal %d", sig);
-
-		if (syncretism_file_entry_send(c, file) == -1)
-			break;
+		syncretism_file_entry_send(c, file);
 	}
 
-	if (file == NULL) {
-		if (syncretism_file_done(c) != -1)
-			ret = 0;
-	}
+	if (file == NULL)
+		syncretism_file_done(c);
 
 	syncretism_file_list_free(&files);
-
-	return (ret);
 }
 
 /*
  * Receive files from the server that we shall store.
  */
-static int
+static void
 client_recv_files(struct conn *c, const char *local)
 {
 	u_int64_t		sz;
-	int			ret, sig;
+	int			sig;
 	char			*path, *digest;
 
 	PRECOND(c != NULL);
-
-	ret = -1;
 
 	for (;;) {
 		path = NULL;
@@ -204,37 +169,21 @@ client_recv_files(struct conn *c, const char *local)
 		if ((sig = syncretism_last_signal()) != -1)
 			fatal("interrupted by signal %d", sig);
 
-		if (syncretism_file_entry_recv(c, &path, &digest, &sz) == -1) {
-			syncretism_log(LOG_NOTICE,
-			    "unexpected disconnect from server");
-			goto cleanup;
-		}
+		syncretism_file_entry_recv(c, &path, &digest, &sz);
 
 		if (!strcmp(path, "done") && !strcmp(digest, "-"))
 			break;
 
-		if (strstr(path, "../")) {
-			syncretism_log(LOG_NOTICE, "malicous path from server");
-			goto cleanup;
-		}
+		if (strstr(path, "../"))
+			fatal("received malicous path from server");
 
-		if (syncretism_file_recv(c, path, sz) == -1) {
-			syncretism_log(LOG_NOTICE,
-			    "failed to receive %s", path);
-			goto cleanup;
-		}
-
+		syncretism_file_recv(c, path, sz);
 		syncretism_log(LOG_NOTICE, "%s/%s (%zu)", local, path, sz);
 
 		free(path);
 		free(digest);
 	}
 
-	ret = 0;
-
-cleanup:
 	free(path);
 	free(digest);
-
-	return (ret);
 }

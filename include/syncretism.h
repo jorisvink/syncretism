@@ -110,27 +110,27 @@ int	syncretism_last_signal(void);
 void	fatal(const char *, ...) __attribute__((noreturn));
 
 void	syncretism_slash_strip(char *);
-int	syncretism_read(int, void *, size_t);
+void	syncretism_read(int, void *, size_t);
 void	syncretism_log(int, const char *, ...);
-int	syncretism_write(int, const void *, size_t);
+void	syncretism_write(int, const void *, size_t);
 void	syncretism_logv(int, const char *, va_list);
-int	syncretism_derive_keys(struct conn *, struct key *, struct key *,
+void	syncretism_derive_keys(struct conn *, struct key *, struct key *,
 	    struct nyfe_agelas *, struct nyfe_agelas *);
 
 /* src/client.c */
 void	syncretism_client(const char *, u_int16_t, char *, char *);
 
 /* src/file.c */
-int	syncretism_file_done(struct conn *);
-int	syncretism_file_list(struct file_list *);
+void	syncretism_file_done(struct conn *);
+void	syncretism_file_list(struct file_list *);
 void	syncretism_file_list_free(struct file_list *);
-int	syncretism_file_send(struct conn *, struct file *);
-int	syncretism_file_save(char *, const void *, size_t);
-int	syncretism_file_recv(struct conn *, char *, u_int64_t);
-int	syncretism_file_entry_send(struct conn *, struct file *);
-int	syncretism_file_entry_recv(struct conn *, char **,
+void	syncretism_file_send(struct conn *, struct file *);
+void	syncretism_file_save(char *, const void *, size_t);
+void	syncretism_file_recv(struct conn *, char *, u_int64_t);
+void	syncretism_file_entry_send(struct conn *, struct file *);
+void	syncretism_file_entry_recv(struct conn *, char **,
 	    char **, u_int64_t *);
-int	syncretism_file_list_add(struct file_list *,
+void	syncretism_file_list_add(struct file_list *,
 	    const char *, const char *);
 void	syncretism_file_list_diff(struct file_list *,
 	    struct file_list *, struct file_list *);
@@ -140,12 +140,12 @@ void	syncretism_server(const char *, u_int16_t, char *);
 
 /* src/msg.c */
 void		syncretism_msg_free(struct msg *);
-int		syncretism_msg_unpack(struct conn *, struct msg *);
-int		syncretism_msg_send(struct conn *, const void *, size_t);
+void		syncretism_msg_unpack(struct conn *, struct msg *);
+void		syncretism_msg_send(struct conn *, const void *, size_t);
 
 struct msg	*syncretism_msg_read(struct conn *);
 char		*syncretism_msg_read_string(struct conn *);
-int		syncretism_msg_read_uint64(struct conn *, u_int64_t *);
+void		syncretism_msg_read_uint64(struct conn *, u_int64_t *);
 struct msg	*syncretism_msg_pack(struct conn *, const void *, size_t);
 
 #endif

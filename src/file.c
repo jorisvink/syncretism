@@ -30,13 +30,13 @@
 
 #include "syncretism.h"
 
-static int	file_sha3sum(struct file *);
+static void	file_sha3sum(struct file *);
 static int	file_cmp(const FTSENT **, const FTSENT **);
 
 /*
  * Create a list of all files under the parent working directory (".").
  */
-int
+void
 syncretism_file_list(struct file_list *list)
 {
 	FTS			*fts;
@@ -53,10 +53,8 @@ syncretism_file_list(struct file_list *list)
 	TAILQ_INIT(list);
 
 	fts = fts_open(pathv, FTS_NOCHDIR | FTS_LOGICAL | FTS_XDEV, file_cmp);
-	if (fts == NULL) {
-		syncretism_log(LOG_NOTICE, "fts_open: %s", errno_s);
-		return (-1);
-	}
+	if (fts == NULL)
+		fatal("fts_open: %s", errno_s);
 
 	while ((ent = fts_read(fts)) != NULL) {
 		if (S_ISDIR(ent->fts_statp->st_mode))
@@ -69,19 +67,13 @@ syncretism_file_list(struct file_list *list)
 		if ((file->path = strdup(ent->fts_accpath + 2)) == NULL)
 			fatal("strdup failed");
 
-		if (file_sha3sum(file) == -1) {
-			free(file->path);
-			free(file);
-			continue;
-		}
-
+		file_sha3sum(file);
 		file->size = ent->fts_statp->st_size;
+
 		TAILQ_INSERT_TAIL(list, file, list);
 	}
 
 	fts_close(fts);
-
-	return (0);
 }
 
 /*
@@ -104,7 +96,7 @@ syncretism_file_list_free(struct file_list *list)
 /*
  * Adds a new entry to the given file list.
  */
-int
+void
 syncretism_file_list_add(struct file_list *list, const char *path,
     const char *digest)
 {
@@ -122,17 +114,10 @@ syncretism_file_list_add(struct file_list *list, const char *path,
 		fatal("strdup failed");
 
 	len = snprintf(file->digest, sizeof(file->digest), "%s", digest);
-	if (len == -1 || (size_t)len >= sizeof(file->digest)) {
-		free(file->path);
-		free(file);
-		syncretism_log(LOG_NOTICE,
-		    "file entry: copy of file digest failed");
-		return (-1);
-	}
+	if (len == -1 || (size_t)len >= sizeof(file->digest))
+		fatal("copy of digest failed");
 
 	TAILQ_INSERT_TAIL(list, file, list);
-
-	return (0);
 }
 
 /*
@@ -190,40 +175,24 @@ syncretism_file_list_diff(struct file_list *ours, struct file_list *theirs,
 /*
  * Send an indication to our peer that we are done with sending files.
  */
-int
+void
 syncretism_file_done(struct conn *c)
 {
 	u_int64_t	dummy;
 
 	PRECOND(c != NULL);
 
-	if (syncretism_msg_send(c, "done", 4) == -1) {
-		syncretism_log(LOG_NOTICE,
-		    "failed to send file done path indication");
-		return (-1);
-	}
-
-	if (syncretism_msg_send(c, "-", 1) == -1) {
-		syncretism_log(LOG_NOTICE,
-		    "failed to send file done digest indication");
-		return (-1);
-	}
+	syncretism_msg_send(c, "done", 4);
+	syncretism_msg_send(c, "-", 1);
 
 	nyfe_random_bytes(&dummy, sizeof(dummy));
-
-	if (syncretism_msg_send(c, &dummy, sizeof(dummy)) == -1) {
-		syncretism_log(LOG_NOTICE,
-		    "failed to send file done size indication");
-		return (-1);
-	}
-
-	return (0);
+	syncretism_msg_send(c, &dummy, sizeof(dummy));
 }
 
 /*
  * Send a file entry to our peer.
  */
-int
+void
 syncretism_file_entry_send(struct conn *c, struct file *file)
 {
 	u_int64_t	sz;
@@ -231,38 +200,21 @@ syncretism_file_entry_send(struct conn *c, struct file *file)
 	PRECOND(c != NULL);
 	PRECOND(file != NULL);
 
-	if (syncretism_msg_send(c, file->path, strlen(file->path)) == -1) {
-		syncretism_log(LOG_NOTICE,
-		    "failed to send file entry path");
-		return (-1);
-	}
-
-	if (syncretism_msg_send(c, file->digest, strlen(file->digest)) == -1) {
-		syncretism_log(LOG_NOTICE,
-		    "failed to send file entry digest");
-		return (-1);
-	}
+	syncretism_msg_send(c, file->path, strlen(file->path));
+	syncretism_msg_send(c, file->digest, strlen(file->digest));
 
 	sz = htobe64(file->size);
-
-	if (syncretism_msg_send(c, &sz, sizeof(sz)) == -1) {
-		syncretism_log(LOG_NOTICE,
-		    "failed to send file entry size");
-		return (-1);
-	}
-
-	return (0);
+	syncretism_msg_send(c, &sz, sizeof(sz));
 }
 
 /*
  * Receive a file entry from our peer and return path and digest to caller.
  */
-int
+void
 syncretism_file_entry_recv(struct conn *c, char **path,
     char **digest, u_int64_t *sz)
 {
 	u_int64_t		tmp;
-	int			ret;
 	char			*p, *d;
 	size_t			idx, len;
 
@@ -273,7 +225,6 @@ syncretism_file_entry_recv(struct conn *c, char **path,
 
 	p = NULL;
 	d = NULL;
-	ret = -1;
 
 	*path = NULL;
 	*digest = NULL;
@@ -281,147 +232,92 @@ syncretism_file_entry_recv(struct conn *c, char **path,
 	if (sz == NULL)
 		sz = &tmp;
 
-	if ((p = syncretism_msg_read_string(c)) == NULL)
-		goto cleanup;
-
-	if ((d = syncretism_msg_read_string(c)) == NULL)
-		goto cleanup;
-
-	if (syncretism_msg_read_uint64(c, sz) == -1)
-		goto cleanup;
+	p = syncretism_msg_read_string(c);
+	d = syncretism_msg_read_string(c);
+	syncretism_msg_read_uint64(c, sz);
 
 	if (!strcmp(p, "done") && !strcmp(d, "-")) {
 		*path = p;
 		*digest = d;
-		return (0);
+		return;
 	}
 
-	if (p[0] == '\0' || p[0] == '/') {
-		syncretism_log(LOG_NOTICE,
-		    "file entry: path is potentially malicous");
-		goto cleanup;
-	}
+	if (p[0] == '\0' || p[0] == '/')
+		fatal("file entry: path is potentially malicous");
 
 	len = strlen(p);
 	for (idx = 0; idx < len; idx++) {
 		if (!isprint((unsigned char)p[idx])) {
-			syncretism_log(LOG_NOTICE,
-			    "file entry: a path contains bad vibes");
-			goto cleanup;
+			fatal("file entry: a path contains bad vibes (%s)", p);
 		}
 	}
 
 	len = strlen(d);
-	if (len != 64) {
-		syncretism_log(LOG_NOTICE,
-		    "file entry: a digest is invalid (%zu) (%s)", len, d);
-		goto cleanup;
-	}
+	if (len != 64)
+		fatal("file entry: a digest is invalid (%zu) (%s)", len, d);
 
 	for (idx = 0; idx < len; idx++) {
-		if (!isxdigit((unsigned char)d[idx])) {
-			syncretism_log(LOG_NOTICE,
-			    "file entry: a digest contains a non-hex digit");
-			return (-1);
-		}
+		if (!isxdigit((unsigned char)d[idx]))
+			fatal("file entry: a digest contains a non-hex digit");
 	}
 
 	*path = p;
 	*digest = d;
-
-	ret = 0;
-
-cleanup:
-	if (ret == -1) {
-		free(p);
-		free(d);
-	}
-
-	return (ret);
 }
 
 /*
  * Send the given file and its contents to our peer.
  */
-int
+void
 syncretism_file_send(struct conn *c, struct file *file)
 {
 	struct stat	st;
+	int		fd;
 	u_int8_t	*buf;
 	size_t		toread;
-	int		fd, ret;
 
 	PRECOND(c != NULL);
 	PRECOND(file != NULL);
 
-	ret = -1;
 	buf = NULL;
 
-	if ((fd = open(file->path, O_RDONLY)) == -1) {
-		syncretism_log(LOG_NOTICE,
-		    "failed to open %s: %s", file->path, errno_s);
-		goto cleanup;
-	}
+	if ((fd = open(file->path, O_RDONLY)) == -1)
+		fatal("failed to open %s: %s", file->path, errno_s);
 
-	if (fstat(fd, &st) == -1) {
-		syncretism_log(LOG_NOTICE,
-		    "failed to fstat %s: %s", file->path, errno_s);
-		goto cleanup;
-	}
+	if (fstat(fd, &st) == -1)
+		fatal("failed to fstat %s: %s", file->path, errno_s);
 
-	if ((buf = calloc(1, SYNCRETISM_MAX_MSG_LEN)) == NULL) {
-		syncretism_log(LOG_NOTICE,
-		    "file data calloc failed (%zu)", (size_t)st.st_size);
-		goto cleanup;
-	}
+	if ((buf = calloc(1, SYNCRETISM_MAX_MSG_LEN)) == NULL)
+		fatal("calloc");
 
-	if (syncretism_file_entry_send(c, file) == -1) {
-		syncretism_log(LOG_NOTICE,
-		    "failed to send file entry for %s", file->path);
-		goto cleanup;
-	}
+	syncretism_file_entry_send(c, file);
 
 	while (st.st_size != 0) {
 		toread = MIN(st.st_size, SYNCRETISM_MAX_MSG_LEN);
-		if (syncretism_read(fd, buf, toread) == -1) {
-			syncretism_log(LOG_NOTICE,
-			    "failed to read chunk of %s", file->path);
-			goto cleanup;
-		}
 
-		if (syncretism_msg_send(c, buf, toread) == -1) {
-			syncretism_log(LOG_NOTICE,
-			    "failed to send file chunk of %s", file->path);
-			goto cleanup;
-		}
+		syncretism_read(fd, buf, toread);
+		syncretism_msg_send(c, buf, toread);
 
 		st.st_size -= toread;
 	}
 
-	ret = 0;
-
-cleanup:
 	free(buf);
 	(void)close(fd);
-
-	return (ret);
 }
 
 /*
  * Receive a file from our peer and write it to disk.
  */
-int
+void
 syncretism_file_recv(struct conn *c, char *path, u_int64_t sz)
 {
 	struct msg	*msg;
-	int		ret, fd, len;
+	int		fd, len;
 	char		*p, tmp[1024];
 
 	PRECOND(c != NULL);
 	PRECOND(path != NULL);
 
-	fd = -1;
-	ret = -1;
 	p = path + 1;
 
 	for (;;) {
@@ -430,79 +326,40 @@ syncretism_file_recv(struct conn *c, char *path, u_int64_t sz)
 
 		*p = '\0';
 
-		if (mkdir(path, 0700) == -1 && errno != EEXIST) {
-			syncretism_log(LOG_NOTICE, "failed to create %s: %s",
-			    path, errno_s);
-			goto cleanup;
-		}
+		if (mkdir(path, 0700) == -1 && errno != EEXIST)
+			fatal("failed to create %s: %s", path, errno_s);
 
 		*p = '/';
 		p++;
 	}
 
 	len = snprintf(tmp, sizeof(tmp), "%s.tmp", path);
-	if (len == -1 || (size_t)len >= sizeof(tmp)) {
-		syncretism_log(LOG_NOTICE, "failed to create tmp path");
-		goto cleanup;
-	}
+	if (len == -1 || (size_t)len >= sizeof(tmp))
+		fatal("failed to snprintf tmp path");
 
-	if ((fd = open(tmp, O_CREAT | O_TRUNC | O_WRONLY, 0700)) == -1) {
-		syncretism_log(LOG_NOTICE,
-		    "failed to open %s: %s", tmp, errno_s);
-		goto cleanup;
-	}
+	if ((fd = open(tmp, O_CREAT | O_TRUNC | O_WRONLY, 0700)) == -1)
+		fatal("open(%s): %s", tmp, errno_s);
 
 	while (sz != 0) {
-		if ((msg = syncretism_msg_read(c)) == NULL) {
-			syncretism_log(LOG_NOTICE,
-			    "failed to receive chunk for %s", path);
-			goto cleanup;
-		}
-
-		if (syncretism_write(fd, msg->data, msg->length) == -1) {
-			syncretism_msg_free(msg);
-			syncretism_log(LOG_NOTICE,
-			    "failed to write chunk of %s: %s", path, errno_s);
-			goto cleanup;
-		}
-
+		msg = syncretism_msg_read(c);
+		syncretism_write(fd, msg->data, msg->length);
 		sz -= msg->length;
 		syncretism_msg_free(msg);
 	}
 
-	if (close(fd) == -1) {
-		fd = -1;
-		syncretism_log(LOG_NOTICE,
-		    "write errors on %s: %s", tmp, errno_s);
-		goto cleanup;
-	}
+	if (close(fd) == -1)
+		fatal("write errors on %s: %s", tmp, errno_s);
 
-	if (rename(tmp, path) == -1) {
-		syncretism_log(LOG_NOTICE,
-		    "rename %s to %s failed: %s", tmp, path, errno_s);
-		goto cleanup;
-	}
+	if (rename(tmp, path) == -1)
+		fatal("rename %s to %s failed: %s", tmp, path, errno_s);
 
-	ret = 0;
-
-cleanup:
-	if (fd != -1)
-		(void)close(fd);
-
-	if (ret == -1) {
-		if (unlink(tmp) == -1 && errno != ENOENT)  {
-			syncretism_log(LOG_NOTICE,
-			    "unlink on %s failed: %s", tmp, errno_s);
-		}
-	}
-
-	return (ret);
+	(void)close(fd);
 }
 
 /*
  * Given a file, calculate its SHA3-256 digest.
  */
-static int
+static void
 file_sha3sum(struct file *file)
 {
 	ssize_t			ret;
@@ -513,11 +370,8 @@ file_sha3sum(struct file *file)
 
 	PRECOND(file != NULL);
 
-	if ((fd = open(file->path, O_RDONLY)) == -1) {
-		syncretism_log(LOG_NOTICE, "failed to open '%s' (%s)",
-		    file->path, errno_s);
-		return (-1);
-	}
+	if ((fd = open(file->path, O_RDONLY)) == -1)
+		fatal("failed to open '%s' (%s)", file->path, errno_s);
 
 	nyfe_sha3_init256(&ctx);
 
@@ -525,9 +379,7 @@ file_sha3sum(struct file *file)
 		if ((ret = read(fd, buf, sizeof(buf))) == -1) {
 			if (errno == EINTR)
 				continue;
-			syncretism_log(LOG_NOTICE, "failed to read '%s' (%s)",
-			    file->path, errno_s);
-			return (-1);
+			fatal("failed to read '%s' (%s)", file->path, errno_s);
 		}
 
 		if (ret == 0)
@@ -546,8 +398,6 @@ file_sha3sum(struct file *file)
 		if (len == -1 || (size_t)len >= sizeof(file->digest))
 			fatal("failed to convert digest to hex form");
 	}
-
-	return (0);
 }
 
 /*

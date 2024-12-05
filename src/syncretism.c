@@ -85,13 +85,12 @@ main(int argc, char *argv[])
 {
 	const char		*ip;
 	u_int16_t		port;
+	char			*p, *ep;
 	int			ch, client;
 
-	port = 0;
-	ip = NULL;
 	client = -1;
 
-	while ((ch = getopt(argc, argv, "cdhi:k:p:sv")) != -1) {
+	while ((ch = getopt(argc, argv, "cdhk:sv")) != -1) {
 		switch (ch) {
 		case 'c':
 			client = 1;
@@ -99,15 +98,8 @@ main(int argc, char *argv[])
 		case 'd':
 			foreground = 0;
 			break;
-		case 'i':
-			ip = optarg;
-			break;
 		case 'k':
 			keypath = optarg;
-			break;
-		case 'p':
-			/* XXX */
-			port = atoi(optarg);
 			break;
 		case 's':
 			client = 0;
@@ -131,20 +123,28 @@ main(int argc, char *argv[])
 	if (keypath == NULL)
 		usage("no key path (-k) has been set");
 
-	if (ip == NULL)
-		usage("no ip (-i) has been set");
+	if (argc == 0)
+		usage("please specify an ip:port");
 
-	if (client == 0 && port == 0)
-		usage("no port (-p) has been set");
-
-	if (client == 1 && argc != 2)
+	if (client == 1 && argc != 3)
 		usage("please specify remote and local directories");
 
-	if (client == 0 && argc != 1)
+	if (client == 0 && argc != 2)
 		usage("server requires a single root directory");
 
 	if (foreground == 0)
 		openlog("syncretism", LOG_NDELAY | LOG_PID, LOG_DAEMON);
+
+	if ((p = strchr(argv[0], ':')) == NULL)
+		fatal("address must be in ip:port format");
+
+	*(p)++ = '\0';
+	ip = argv[0];
+
+	errno = 0;
+	port = strtoull(p, &ep, 10);
+	if (errno != 0 || *ep != '\0' || port == 0)
+		fatal("port '%s' invalid", p);
 
 	signal_trap(SIGINT);
 	signal_trap(SIGHUP);
@@ -156,9 +156,9 @@ main(int argc, char *argv[])
 	nyfe_random_init();
 
 	if (client) {
-		syncretism_client(ip, port, argv[0], argv[1]);
+		syncretism_client(ip, port, argv[1], argv[2]);
 	} else {
-		syncretism_server(ip, port, argv[0]);
+		syncretism_server(ip, port, argv[1]);
 	}
 
 	return (0);
@@ -167,7 +167,7 @@ main(int argc, char *argv[])
 /*
  * Derive the TX and RX keys used for our communication with the peer.
  */
-int
+void
 syncretism_derive_keys(struct conn *c, struct key *rx, struct key *tx,
     struct nyfe_agelas *rx_encap, struct nyfe_agelas *tx_encap)
 {
@@ -182,19 +182,14 @@ syncretism_derive_keys(struct conn *c, struct key *rx, struct key *tx,
 	PRECOND(rx_encap != NULL);
 	PRECOND(tx_encap != NULL);
 
-	if ((fd = open(keypath,  O_RDONLY)) == -1) {
-		syncretism_log(LOG_NOTICE,
-		    "failed to open syncretism key: %s", errno_s);
-		return (-1);
-	}
+	if ((fd = open(keypath,  O_RDONLY)) == -1)
+		fatal("failed to open syncretism key: %s", errno_s);
 
 	nyfe_zeroize_register(key, sizeof(key));
 
 	if (nyfe_file_read(fd, key, sizeof(key)) != sizeof(key)) {
-		(void)close(fd);
 		nyfe_zeroize(key, sizeof(key));
-		syncretism_log(LOG_NOTICE, "failed read syncretism key");
-		return (-1);
+		fatal("failed read syncretism key");
 	}
 
 	(void)close(fd);
@@ -226,14 +221,12 @@ syncretism_derive_keys(struct conn *c, struct key *rx, struct key *tx,
 
 	rx->nonce = 1;
 	tx->nonce = 1;
-
-	return (0);
 }
 
 /*
  * Write all data to the given socket.
  */
-int
+void
 syncretism_write(int fd, const void *data, size_t len)
 {
 	size_t			off;
@@ -250,21 +243,17 @@ syncretism_write(int fd, const void *data, size_t len)
 		if ((ret = write(fd, ptr + off, len - off)) == -1) {
 			if (errno == EINTR)
 				continue;
-
-			syncretism_log(LOG_INFO, "write: %s ", errno_s);
-			return (-1);
+			fatal("write error: %s ", errno_s);
 		}
 
 		off += ret;
 	}
-
-	return (0);
 }
 
 /*
  * Read the exact amount of bytes from the given socket.
  */
-int
+void
 syncretism_read(int fd, void *data, size_t len)
 {
 	size_t		off;
@@ -282,24 +271,17 @@ syncretism_read(int fd, void *data, size_t len)
 			if (errno == EINTR)
 				continue;
 
-			if (errno == EWOULDBLOCK || errno == EAGAIN) {
-				syncretism_log(LOG_NOTICE, "read timeout");
-			} else {
-				syncretism_log(LOG_INFO, "read: %s", errno_s);
-			}
+			if (errno == EWOULDBLOCK || errno == EAGAIN)
+				fatal("read timeout");
 
-			return (-1);
+			fatal("read error: %s", errno_s);
 		}
 
-		if (ret == 0) {
-			syncretism_log(LOG_INFO, "read: eof");
-			return (-1);
-		}
+		if (ret == 0)
+			fatal("unexpected eof");
 
 		off += ret;
 	}
-
-	return (0);
 }
 
 /*
@@ -340,6 +322,7 @@ void
 syncretism_logv(int prio, const char *fmt, va_list args)
 {
 	if (foreground) {
+		printf("[%d] ", getpid());
 		vprintf(fmt, args);
 		printf("\n");
 	} else {

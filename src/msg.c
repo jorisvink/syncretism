@@ -78,7 +78,7 @@ syncretism_msg_pack(struct conn *c, const void *data, size_t len)
 /*
  * Authenticate and decrypt the given message under the rx key.
  */
-int
+void
 syncretism_msg_unpack(struct conn *c, struct msg *msg)
 {
 	u_int8_t		*tag;
@@ -115,11 +115,9 @@ syncretism_msg_unpack(struct conn *c, struct msg *msg)
 	nyfe_zeroize(&cipher, sizeof(cipher));
 
 	if (nyfe_mem_cmp(tag, calc, sizeof(calc)))
-		return (-1);
+		fatal("failed to verify integrity on received message");
 
 	c->rx.nonce++;
-
-	return (0);
 }
 
 /*
@@ -141,7 +139,7 @@ syncretism_msg_free(struct msg *msg)
  * Authenticate and encrypt the given data and send it to our peer
  * as a single message.
  */
-int
+void
 syncretism_msg_send(struct conn *c, const void *buf, size_t buflen)
 {
 	struct msg	*msg;
@@ -151,15 +149,8 @@ syncretism_msg_send(struct conn *c, const void *buf, size_t buflen)
 	PRECOND(buflen <= SYNCRETISM_MAX_MSG_LEN);
 
 	msg = syncretism_msg_pack(c, buf, buflen);
-
-	if (syncretism_write(c->fd, msg->data, msg->length) == -1) {
-		syncretism_msg_free(msg);
-		return (-1);
-	}
-
+	syncretism_write(c->fd, msg->data, msg->length);
 	syncretism_msg_free(msg);
-
-	return (0);
 }
 
 /*
@@ -174,17 +165,13 @@ syncretism_msg_read(struct conn *c)
 
 	PRECOND(c != NULL);
 
-	if (syncretism_read(c->fd, &len, sizeof(len)) == -1)
-		return (NULL);
-
+	syncretism_read(c->fd, &len, sizeof(len));
 	nyfe_agelas_decrypt(&c->rx_encap, &len, &len, sizeof(len));
 
 	len = be32toh(len);
 	if (len < SYNCRETISM_TAG_LEN ||
-	    len > sizeof(len) + SYNCRETISM_MAX_MSG_LEN + SYNCRETISM_TAG_LEN) {
-		syncretism_log(LOG_NOTICE, "received weird length (%u)", len);
-		return (NULL);
-	}
+	    len > sizeof(len) + SYNCRETISM_MAX_MSG_LEN + SYNCRETISM_TAG_LEN)
+		fatal("received weird length (%u)", len);
 
 	if ((msg = calloc(1, sizeof(*msg))) == NULL)
 		fatal("calloc: failed to allocate msg");
@@ -194,15 +181,8 @@ syncretism_msg_read(struct conn *c)
 	if ((msg->data = calloc(1, msg->length)) == NULL)
 		fatal("calloc: failed to allocate msg data");
 
-	if (syncretism_read(c->fd, msg->data, msg->length) == -1) {
-		syncretism_msg_free(msg);
-		return (NULL);
-	}
-
-	if (syncretism_msg_unpack(c, msg) == -1) {
-		syncretism_msg_free(msg);
-		return (NULL);
-	}
+	syncretism_read(c->fd, msg->data, msg->length);
+	syncretism_msg_unpack(c, msg);
 
 	return (msg);
 }
@@ -219,25 +199,18 @@ syncretism_msg_read_string(struct conn *c)
 
 	PRECOND(c != NULL);
 
-	if ((msg = syncretism_msg_read(c)) == NULL)
-		return (NULL);
+	msg = syncretism_msg_read(c);
 
 	if ((str = calloc(1, msg->length + 1)) == NULL)
 		fatal("calloc");
 
 	for (idx = 0; idx < msg->length; idx++) {
-		if (msg->data[idx] == '\0') {
-			syncretism_log(LOG_NOTICE,
-			    "expected string has embedded NUL-byte");
-			syncretism_msg_free(msg);
-			return (NULL);
-		}
-
+		if (msg->data[idx] == '\0')
+			fatal("expected string has embedded NUL-byte");
 		str[idx] = msg->data[idx];
 	}
 
 	str[idx] = '\0';
-
 	syncretism_msg_free(msg);
 
 	return (str);
@@ -246,7 +219,7 @@ syncretism_msg_read_string(struct conn *c)
 /*
  * Returns a received message as a uint64 to the caller.
  */
-int
+void
 syncretism_msg_read_uint64(struct conn *c, u_int64_t *res)
 {
 	struct msg	*msg;
@@ -254,18 +227,15 @@ syncretism_msg_read_uint64(struct conn *c, u_int64_t *res)
 	PRECOND(c != NULL);
 	PRECOND(res != NULL);
 
-	if ((msg = syncretism_msg_read(c)) == NULL)
-		return (-1);
+	msg = syncretism_msg_read(c);
 
 	if (msg->length != sizeof(*res)) {
-		syncretism_msg_free(msg);
-		return (-1);
+		fatal("unexpected message length - wanted 8, got %u",
+		    msg->length);
 	}
 
 	memcpy(res, msg->data, msg->length);
 	syncretism_msg_free(msg);
 
 	*res = be64toh(*res);
-
-	return (0);
 }
