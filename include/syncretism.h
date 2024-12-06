@@ -34,7 +34,6 @@
 #if defined(__APPLE__)
 #undef daemon
 extern int daemon(int, int);
-#endif
 
 #include <libkern/OSByteOrder.h>
 #define htobe16(x)		OSSwapHostToBigInt16(x)
@@ -43,6 +42,7 @@ extern int daemon(int, int);
 #define be16toh(x)		OSSwapBigToHostInt16(x)
 #define be32toh(x)		OSSwapBigToHostInt32(x)
 #define be64toh(x)		OSSwapBigToHostInt64(x)
+#endif
 
 /* Makes life easier. */
 #define errno_s			strerror(errno)
