@@ -60,12 +60,22 @@ extern int daemon(int, int);
 #define SYNCRETISM_FILES_DONE		"done"
 
 /*
+ * A file entry that is sent before each file. This includes mtime,
+ * size and mode for the file together with its digest.
+ */
+struct file_entry {
+	u_int64_t		size;
+	u_int64_t		mtime;
+	u_int64_t		mode;
+	u_int8_t		digest[32];
+} __attribute__((packed));
+
+/*
  * Represents a file on the server or client, its path and its SHA3-256 digest.
  */
 struct file {
 	char			*path;
-	u_int64_t		size;
-	char			digest[65];
+	struct file_entry	entry;
 	TAILQ_ENTRY(file)	list;
 };
 
@@ -115,6 +125,7 @@ struct msg {
 
 /* src/syncretism.c */
 int	syncretism_last_signal(void);
+void	syncretism_signal_check(void);
 void	fatal(const char *, ...) __attribute__((noreturn));
 
 void	syncretism_slash_strip(char *);
@@ -134,12 +145,11 @@ void	syncretism_file_list(struct file_list *);
 void	syncretism_file_list_free(struct file_list *);
 void	syncretism_file_send(struct conn *, struct file *);
 void	syncretism_file_save(char *, const void *, size_t);
-void	syncretism_file_recv(struct conn *, char *, u_int64_t);
 void	syncretism_file_entry_send(struct conn *, struct file *);
-void	syncretism_file_entry_recv(struct conn *, char **,
-	    char **, u_int64_t *);
+char	*syncretism_file_entry_recv(struct conn *, struct file_entry *);
+void	syncretism_file_recv(struct conn *, char *, struct file_entry *);
 void	syncretism_file_list_add(struct file_list *,
-	    const char *, const char *);
+	    const char *, struct file_entry *);
 void	syncretism_file_list_diff(struct file_list *,
 	    struct file_list *, struct file_list *);
 

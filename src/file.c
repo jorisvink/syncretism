@@ -17,15 +17,18 @@
 #include <sys/param.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 
 #include <ctype.h>
 #include <fts.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "syncretism.h"
@@ -57,6 +60,8 @@ syncretism_file_list(struct file_list *list)
 		fatal("fts_open: %s", errno_s);
 
 	while ((ent = fts_read(fts)) != NULL) {
+		syncretism_signal_check();
+
 		if (S_ISDIR(ent->fts_statp->st_mode))
 			continue;
 
@@ -68,7 +73,10 @@ syncretism_file_list(struct file_list *list)
 			fatal("strdup failed");
 
 		file_sha3sum(file);
-		file->size = ent->fts_statp->st_size;
+
+		file->entry.mode = ent->fts_statp->st_mode;
+		file->entry.size = ent->fts_statp->st_size;
+		file->entry.mtime = ent->fts_statp->st_mtime;
 
 		TAILQ_INSERT_TAIL(list, file, list);
 	}
@@ -98,14 +106,13 @@ syncretism_file_list_free(struct file_list *list)
  */
 void
 syncretism_file_list_add(struct file_list *list, const char *path,
-    const char *digest)
+    struct file_entry *ent)
 {
-	int			len;
 	struct file		*file;
 
 	PRECOND(list != NULL);
 	PRECOND(path != NULL);
-	PRECOND(digest != NULL);
+	PRECOND(ent != NULL);
 
 	if ((file = calloc(1, sizeof(*file))) == NULL)
 		fatal("calloc failed");
@@ -113,9 +120,7 @@ syncretism_file_list_add(struct file_list *list, const char *path,
 	if ((file->path = strdup(path)) == NULL)
 		fatal("strdup failed");
 
-	len = snprintf(file->digest, sizeof(file->digest), "%s", digest);
-	if (len == -1 || (size_t)len >= sizeof(file->digest))
-		fatal("copy of digest failed");
+	memcpy(&file->entry, ent, sizeof(file->entry));
 
 	TAILQ_INSERT_TAIL(list, file, list);
 }
@@ -152,41 +157,44 @@ syncretism_file_list_diff(struct file_list *ours, struct file_list *theirs,
 		for (b = TAILQ_FIRST(ours); b != NULL; b = bn) {
 			bn = TAILQ_NEXT(b, list);
 
-			if (!strcmp(a->path, b->path)) {
-				TAILQ_REMOVE(theirs, a, list);
-				TAILQ_REMOVE(ours, b, list);
+			if (strcmp(a->path, b->path))
+				continue;
 
-				if (strcmp(a->digest, b->digest)) {
-					TAILQ_INSERT_TAIL(update, b, list);
-				} else {
-					free(b->path);
-					free(b);
-				}
+			TAILQ_REMOVE(theirs, a, list);
+			TAILQ_REMOVE(ours, b, list);
 
-				free(a->path);
-				free(a);
-
-				break;
+			if (nyfe_mem_cmp(a->entry.digest,
+			    b->entry.digest, sizeof(a->entry.digest))) {
+				TAILQ_INSERT_TAIL(update, b, list);
+			} else {
+				free(b->path);
+				free(b);
 			}
+
+			free(a->path);
+			free(a);
+
+			break;
 		}
 	}
 }
 
 /*
  * Send an indication to our peer that we are done with sending files.
+ * We do this by sending a path with name "done" and a file_entry
+ * containing only 0 bytes.
  */
 void
 syncretism_file_done(struct conn *c)
 {
-	u_int64_t	dummy;
+	struct file_entry	ent;
 
 	PRECOND(c != NULL);
 
-	syncretism_msg_send(c, "done", 4);
-	syncretism_msg_send(c, "-", 1);
+	nyfe_mem_zero(&ent, sizeof(ent));
 
-	nyfe_random_bytes(&dummy, sizeof(dummy));
-	syncretism_msg_send(c, &dummy, sizeof(dummy));
+	syncretism_msg_send(c, "done", 4);
+	syncretism_msg_send(c, &ent, sizeof(ent));
 }
 
 /*
@@ -195,74 +203,73 @@ syncretism_file_done(struct conn *c)
 void
 syncretism_file_entry_send(struct conn *c, struct file *file)
 {
-	u_int64_t	sz;
+	struct file_entry	ent;
 
 	PRECOND(c != NULL);
 	PRECOND(file != NULL);
 
-	syncretism_msg_send(c, file->path, strlen(file->path));
-	syncretism_msg_send(c, file->digest, strlen(file->digest));
+	memcpy(&ent, &file->entry, sizeof(ent));
 
-	sz = htobe64(file->size);
-	syncretism_msg_send(c, &sz, sizeof(sz));
+	ent.mode = htobe64(ent.mode);
+	ent.size = htobe64(ent.size);
+	ent.mtime = htobe64(ent.mtime);
+
+	syncretism_msg_send(c, file->path, strlen(file->path));
+	syncretism_msg_send(c, &ent, sizeof(ent));
 }
 
 /*
- * Receive a file entry from our peer and return path and digest to caller.
+ * Receive a file entry from our peer and return info to caller.
  */
-void
-syncretism_file_entry_recv(struct conn *c, char **path,
-    char **digest, u_int64_t *sz)
+char *
+syncretism_file_entry_recv(struct conn *c, struct file_entry *ent)
 {
-	u_int64_t		tmp;
-	char			*p, *d;
+	struct msg		*msg;
+	char			*path;
 	size_t			idx, len;
 
 	PRECOND(c != NULL);
-	PRECOND(path != NULL);
-	PRECOND(digest != NULL);
-	/* sz can be NULL. */
+	PRECOND(ent != NULL);
 
-	p = NULL;
-	d = NULL;
+	path = syncretism_msg_read_string(c);
+	msg = syncretism_msg_read(c);
+	if (msg->length != sizeof(*ent))
+		fatal("expected entry, got %zu bytes", sizeof(*ent));
 
-	*path = NULL;
-	*digest = NULL;
+	memcpy(ent, msg->data, sizeof(*ent));
 
-	if (sz == NULL)
-		sz = &tmp;
+	ent->size = be64toh(ent->size);
+	ent->mode = be64toh(ent->mode);
+	ent->mtime = be64toh(ent->mtime);
 
-	p = syncretism_msg_read_string(c);
-	d = syncretism_msg_read_string(c);
-	syncretism_msg_read_uint64(c, sz);
+	if (!strcmp(path, "done")) {
+		for (idx = 0; idx < msg->length; idx++) {
+			if (msg->data[idx] != 0)
+				break;
+		}
 
-	if (!strcmp(p, "done") && !strcmp(d, "-")) {
-		*path = p;
-		*digest = d;
-		return;
-	}
-
-	if (p[0] == '\0' || p[0] == '/')
-		fatal("file entry: path is potentially malicous");
-
-	len = strlen(p);
-	for (idx = 0; idx < len; idx++) {
-		if (!isprint((unsigned char)p[idx])) {
-			fatal("file entry: a path contains bad vibes (%s)", p);
+		if (idx == msg->length) {
+			free(path);
+			syncretism_msg_free(msg);
+			return (NULL);
 		}
 	}
 
-	len = strlen(d);
-	if (len != 64)
-		fatal("file entry: a digest is invalid (%zu) (%s)", len, d);
+	syncretism_msg_free(msg);
 
+	if (path[0] == '\0' || path[0] == '/')
+		fatal("file entry: path is potentially malicous");
+
+	if (strstr(path, "../"))
+		fatal("file entry: peer sent malicous path");
+
+	len = strlen(path);
 	for (idx = 0; idx < len; idx++) {
-		if (!isxdigit((unsigned char)d[idx]))
-			fatal("file entry: a digest contains a non-hex digit");
+		if (!isprint((unsigned char)path[idx]))
+			fatal("file entry: a path contains bad vibes");
 	}
 
-	*path = p;
-	*digest = d;
+	return (path);
 }
 
 /*
@@ -309,14 +316,17 @@ syncretism_file_send(struct conn *c, struct file *file)
  * Receive a file from our peer and write it to disk.
  */
 void
-syncretism_file_recv(struct conn *c, char *path, u_int64_t sz)
+syncretism_file_recv(struct conn *c, char *path, struct file_entry *ent)
 {
-	struct msg	*msg;
-	int		fd, len;
-	char		*p, tmp[1024];
+	struct msg		*msg;
+	u_int64_t		remain;
+	int			fd, len;
+	struct timeval		times[2];
+	char			*p, tmp[1024];
 
 	PRECOND(c != NULL);
 	PRECOND(path != NULL);
+	PRECOND(ent != NULL);
 
 	p = path + 1;
 
@@ -340,12 +350,31 @@ syncretism_file_recv(struct conn *c, char *path, u_int64_t sz)
 	if ((fd = open(tmp, O_CREAT | O_TRUNC | O_WRONLY, 0700)) == -1)
 		fatal("open(%s): %s", tmp, errno_s);
 
-	while (sz != 0) {
+	remain = ent->size;
+
+	while (remain != 0) {
 		msg = syncretism_msg_read(c);
+
+		if (msg->length > remain) {
+			fatal("received file chunk odd %zu/%" PRIu64 " left",
+			    msg->length, remain);
+		}
+
 		syncretism_write(fd, msg->data, msg->length);
-		sz -= msg->length;
+		remain -= msg->length;
+
 		syncretism_msg_free(msg);
 	}
+
+	memset(&times, 0, sizeof(times));
+	time(&times[0].tv_sec);
+	times[1].tv_sec = ent->mtime;
+
+	if (futimes(fd, times) == -1)
+		fatal("futimes(%s): %s", tmp, errno_s);
+
+	if (fchmod(fd, ent->mode) == -1)
+		fatal("fchmod(%s): %s", tmp, errno_s);
 
 	if (close(fd) == -1)
 		fatal("write errors on %s: %s", tmp, errno_s);
@@ -362,11 +391,10 @@ syncretism_file_recv(struct conn *c, char *path, u_int64_t sz)
 static void
 file_sha3sum(struct file *file)
 {
+	int			fd;
 	ssize_t			ret;
-	size_t			idx;
 	struct nyfe_sha3	ctx;
-	int			fd, len;
-	u_int8_t		buf[512], digest[32];
+	u_int8_t		buf[512];
 
 	PRECOND(file != NULL);
 
@@ -390,14 +418,7 @@ file_sha3sum(struct file *file)
 
 	(void)close(fd);
 
-	nyfe_sha3_final(&ctx, digest, sizeof(digest));
-
-	for (idx = 0; idx < sizeof(digest); idx++) {
-		len = snprintf(file->digest + (idx * 2),
-		    sizeof(file->digest) - (idx * 2), "%02x", digest[idx]);
-		if (len == -1 || (size_t)len >= sizeof(file->digest))
-			fatal("failed to convert digest to hex form");
-	}
+	nyfe_sha3_final(&ctx, file->entry.digest, sizeof(file->entry.digest));
 }
 
 /*

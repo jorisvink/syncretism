@@ -339,6 +339,16 @@ syncretism_logv(int prio, const char *fmt, va_list args)
 }
 
 /*
+ * Kill syncretism if we got interrupted by a signal.
+ */
+void
+syncretism_signal_check(void)
+{
+	if (sig_recv != -1)
+		fatal("interrupted by signal %d", sig_recv);
+}
+
+/*
  * Returns the last received signal to the caller and resets sig_recv.
  */
 int

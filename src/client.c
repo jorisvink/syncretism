@@ -138,7 +138,6 @@ client_send_auth(struct conn *c)
 static void
 client_send_files(struct conn *c, const char *remote)
 {
-	int			sig;
 	struct file		*file;
 	struct file_list	files;
 
@@ -148,8 +147,7 @@ client_send_files(struct conn *c, const char *remote)
 	syncretism_file_list(&files);
 
 	TAILQ_FOREACH(file, &files, list) {
-		if ((sig = syncretism_last_signal()) != -1)
-			fatal("interrupted by signal %d", sig);
+		syncretism_signal_check();
 		syncretism_file_entry_send(c, file);
 	}
 
@@ -165,36 +163,23 @@ client_send_files(struct conn *c, const char *remote)
 static void
 client_recv_files(struct conn *c, const char *local)
 {
-	u_int64_t		sz;
-	int			sig;
-	char			*path, *digest;
+	struct file_entry	ent;
+	char			*path;
 
 	PRECOND(c != NULL);
 
 	for (;;) {
-		path = NULL;
-		digest = NULL;
+		syncretism_signal_check();
 
-		if ((sig = syncretism_last_signal()) != -1)
-			fatal("interrupted by signal %d", sig);
-
-		syncretism_file_entry_recv(c, &path, &digest, &sz);
-
-		if (!strcmp(path, "done") && !strcmp(digest, "-"))
+		if ((path = syncretism_file_entry_recv(c, &ent)) == NULL)
 			break;
-
-		if (strstr(path, "../"))
-			fatal("received malicous path from server");
 
 		file_count++;
 
-		syncretism_file_recv(c, path, sz);
-		syncretism_log(LOG_NOTICE, "%s/%s (%zu)", local, path, sz);
+		syncretism_file_recv(c, path, &ent);
+		syncretism_log(LOG_NOTICE,
+		    "%s/%s (%" PRIu64 ")", local, path, ent.size);
 
 		free(path);
-		free(digest);
 	}
-
-	free(path);
-	free(digest);
 }

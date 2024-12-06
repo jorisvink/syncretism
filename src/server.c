@@ -206,17 +206,16 @@ server_reap_children(void)
 static void
 server_client_handle(struct conn *c, char *root)
 {
-	int			sig;
+	struct file_entry	ent;
 	struct file		*file;
+	char			*path;
 	size_t			rootlen;
-	char			*path, *digest;
 	struct file_list	ours, theirs, update;
 
 	PRECOND(c != NULL);
 	PRECOND(root != NULL);
 
 	path = NULL;
-	digest = NULL;
 	rootlen = strlen(root);
 
 	TAILQ_INIT(&ours);
@@ -235,45 +234,29 @@ server_client_handle(struct conn *c, char *root)
 	free(path);
 
 	for (;;) {
-		path = NULL;
-		digest = NULL;
+		syncretism_signal_check();
 
-		if ((sig = syncretism_last_signal()) != -1)
-			fatal("interrupted by signal %d", sig);
-
-		syncretism_file_entry_recv(c, &path, &digest, NULL);
-
-		if (!strcmp(path, "done") && !strcmp(digest, "-"))
+		if ((path = syncretism_file_entry_recv(c, &ent)) == NULL)
 			break;
 
-		if (strstr(path, "../"))
-			fatal("client sent malicous path");
-
-		syncretism_file_list_add(&theirs, path, digest);
-
+		syncretism_file_list_add(&theirs, path, &ent);
 		free(path);
-		free(digest);
 	}
 
 	syncretism_file_list(&ours);
 	syncretism_file_list_diff(&ours, &theirs, &update);
 
 	TAILQ_FOREACH(file, &ours, list) {
-		if ((sig = syncretism_last_signal()) != -1)
-			fatal("interrupted by signal %d", sig);
+		syncretism_signal_check();
 		syncretism_file_send(c, file);
 	}
 
 	TAILQ_FOREACH(file, &update, list) {
-		if ((sig = syncretism_last_signal()) != -1)
-			fatal("interrupted by signal %d", sig);
+		syncretism_signal_check();
 		syncretism_file_send(c, file);
 	}
 
 	syncretism_file_done(c);
-
-	free(path);
-	free(digest);
 
 	syncretism_file_list_free(&ours);
 	syncretism_file_list_free(&theirs);
