@@ -65,6 +65,9 @@ usage(const char *reason)
 	printf("  -v       Print version information\n");
 
 	printf("\n");
+	printf("Key files are 32-byte files consisting of cryptographically\n");
+	printf("strong random data and can be generated from /dev/urandom.\n");
+	printf("\n");
 	printf("On the client side specify both the remote and local\n");
 	printf("directories. For example, syncing the remote directory\n");
 	printf("/home/cathedral to a local directory called backup-231021:\n");
@@ -181,7 +184,7 @@ syncretism_derive_keys(struct conn *c, struct key *rx, struct key *tx,
 	int			fd;
 	struct nyfe_kmac256	kdf;
 	u_int16_t		len;
-	u_int8_t		key[32], okm[256];
+	u_int8_t		ss[32], okm[256];
 
 	PRECOND(c != NULL);
 	PRECOND(rx != NULL);
@@ -192,11 +195,11 @@ syncretism_derive_keys(struct conn *c, struct key *rx, struct key *tx,
 	if ((fd = open(keypath,  O_RDONLY)) == -1)
 		fatal("failed to open syncretism key: %s", errno_s);
 
-	nyfe_zeroize_register(key, sizeof(key));
+	nyfe_zeroize_register(ss, sizeof(ss));
 
-	if (nyfe_file_read(fd, key, sizeof(key)) != sizeof(key)) {
-		nyfe_zeroize(key, sizeof(key));
-		fatal("failed read syncretism key");
+	if (nyfe_file_read(fd, ss, sizeof(ss)) != sizeof(ss)) {
+		nyfe_zeroize(ss, sizeof(ss));
+		fatal("failed read syncretism shared secret");
 	}
 
 	(void)close(fd);
@@ -204,9 +207,9 @@ syncretism_derive_keys(struct conn *c, struct key *rx, struct key *tx,
 	nyfe_zeroize_register(okm, sizeof(okm));
 	nyfe_zeroize_register(&kdf, sizeof(kdf));
 
-	nyfe_kmac256_init(&kdf, key, sizeof(key),
+	nyfe_kmac256_init(&kdf, ss, sizeof(ss),
 	    SYNCRETISM_LABEL, sizeof(SYNCRETISM_LABEL) - 1);
-	nyfe_zeroize(key, sizeof(key));
+	nyfe_zeroize(ss, sizeof(ss));
 
 	len = htobe16(sizeof(okm));
 
