@@ -154,7 +154,7 @@ void	syncretism_file_list_diff(struct file_list *,
 	    struct file_list *, struct file_list *);
 
 /* src/server.c */
-void	syncretism_server(const char *, u_int16_t, char *);
+void	syncretism_server(const char *, u_int16_t, char *, const char *);
 
 /* src/msg.c */
 void		syncretism_msg_free(struct msg *);

@@ -31,6 +31,9 @@
 
 #include "syncretism.h"
 
+static void	server_pidfile_write(const char *);
+static void	server_pidfile_unlink(const char *);
+
 static void	server_reap_children(void);
 static int	server_wait_and_fork(int, char *);
 
@@ -45,7 +48,7 @@ static void	server_client_handle(struct conn *, char *);
  * Bind to the given ip:port and handle incoming connections from our peer.
  */
 void
-syncretism_server(const char *ip, u_int16_t port, char *root)
+syncretism_server(const char *ip, u_int16_t port, char *root, const char *pid)
 {
 	struct sockaddr_in	sin;
 	int			fd, on;
@@ -53,6 +56,7 @@ syncretism_server(const char *ip, u_int16_t port, char *root)
 	PRECOND(ip != NULL);
 	PRECOND(port > 0);
 	PRECOND(root != NULL);
+	PRECOND(pid != NULL);
 
 	syncretism_slash_strip(root);
 
@@ -61,6 +65,9 @@ syncretism_server(const char *ip, u_int16_t port, char *root)
 
 	if (chdir(root) == -1)
 		fatal("chdir(%s): %s", root, errno_s);
+
+	if (pid != NULL)
+		server_pidfile_write(pid);
 
 	if ((fd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
 		fatal("socket: %s", errno_s);
@@ -89,6 +96,9 @@ syncretism_server(const char *ip, u_int16_t port, char *root)
 	}
 
 	syncretism_log(LOG_INFO, "exiting");
+
+	if (pid != NULL)
+		server_pidfile_unlink(pid);
 }
 
 /*
@@ -335,4 +345,48 @@ server_client_auth(struct conn *c)
 	syncretism_msg_free(msg);
 
 	syncretism_log(LOG_INFO, "client authenticated");
+}
+
+/*
+ * Write our pid to the pidfile that was given by the user.
+ */
+static void
+server_pidfile_write(const char *pidfile)
+{
+	int		fd;
+	FILE		*fp;
+
+	PRECOND(pidfile != NULL);
+
+	/* Don't call fatal() here, we don't want to try and remove it. */
+	if (access(pidfile, R_OK) != -1 && errno != ENOENT) {
+		fprintf(stderr, "pidfile '%s' exists\n", pidfile);
+		exit(1);
+	}
+
+	fd = nyfe_file_open(pidfile, NYFE_FILE_CREATE);
+
+	if ((fp = fdopen(fd, "w")) == NULL)
+		fatal("fdopen: %s", strerror(errno));
+
+	(void)fprintf(fp, "%d", getpid());
+
+	if (fclose(fp) != 0) {
+		syncretism_log(LOG_NOTICE,
+		    "close on pidfile failed: %s", errno_s);
+	}
+}
+
+/*
+ * Remove our pidfile from disk by unlinking it.
+ */
+static void
+server_pidfile_unlink(const char *pidfile)
+{
+	PRECOND(pidfile != NULL);
+
+	if (unlink(pidfile) == -1 && errno != ENOENT) {
+		syncretism_log(LOG_NOTICE, "failed to remove pidfile '%s' (%s)",
+		    pidfile, errno_s);
+	}
 }

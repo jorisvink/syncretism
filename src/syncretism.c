@@ -26,10 +26,10 @@
 /* The label used for KMAC256() when deriving keys. */
 #define SYNCRETISM_LABEL		"SYNCRETISM.KDF"
 
-static void		signal_trap(int);
-static void		signal_hdlr(int);
-static void		signal_memfault(int);
-static void		usage(const char *) __attribute__((noreturn));
+static void	signal_trap(int);
+static void	signal_hdlr(int);
+static void	signal_memfault(int);
+static void	usage(const char *) __attribute__((noreturn));
 
 /* Last received signal. */
 volatile sig_atomic_t	sig_recv = -1;
@@ -63,6 +63,7 @@ usage(const char *reason)
 	printf("  -d       Daemonize server\n");
 	printf("  -k       Absolute path to the shared secret\n");
 	printf("  -v       Print version information\n");
+	printf("  -p       Pid file when running as daemonized server\n");
 
 	printf("\n");
 	printf("Key files are 32-byte files consisting of cryptographically\n");
@@ -93,8 +94,11 @@ main(int argc, char *argv[])
 	const char		*ip;
 	u_int16_t		port;
 	char			*p, *ep;
+	const char		*pidfile;
 
-	while ((ch = getopt(argc, argv, "cdhk:sv")) != -1) {
+	pidfile = NULL;
+
+	while ((ch = getopt(argc, argv, "cdhk:p:sv")) != -1) {
 		switch (ch) {
 		case 'c':
 			client = 1;
@@ -104,6 +108,9 @@ main(int argc, char *argv[])
 			break;
 		case 'k':
 			keypath = optarg;
+			break;
+		case 'p':
+			pidfile = optarg;
 			break;
 		case 's':
 			client = 0;
@@ -129,6 +136,10 @@ main(int argc, char *argv[])
 
 	if (argc == 0)
 		usage("please specify an ip:port");
+
+	if ((client == 1 && pidfile != NULL) ||
+	    (client == 0 && pidfile != NULL && foreground == 1))
+		usage("pidfile (-p) only valid for server mode (-s) with -d");
 
 	if (client == 1 && argc != 3)
 		usage("please specify remote and local directories");
@@ -165,10 +176,10 @@ main(int argc, char *argv[])
 		syncretism_client(ip, port, argv[1], argv[2]);
 	} else {
 		if (foreground == 0) {
-			if (daemon(1, 0) == -1)
+			if (daemon(1, 1) == -1)
 				fatal("daemon: %s", errno_s);
 		}
-		syncretism_server(ip, port, argv[1]);
+		syncretism_server(ip, port, argv[1], pidfile);
 	}
 
 	return (0);
