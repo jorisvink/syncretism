@@ -234,7 +234,7 @@ syncretism_file_entry_recv(struct conn *c, struct file_entry *ent)
 	path = syncretism_msg_read_string(c);
 	msg = syncretism_msg_read(c);
 	if (msg->length != sizeof(*ent))
-		fatal("expected entry, got %zu bytes", sizeof(*ent));
+		fatal("expected entry, got %zu bytes", msg->length);
 
 	memcpy(ent, msg->data, sizeof(*ent));
 
