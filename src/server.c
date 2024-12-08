@@ -56,7 +56,7 @@ syncretism_server(const char *ip, u_int16_t port, char *root, const char *pid)
 	PRECOND(ip != NULL);
 	PRECOND(port > 0);
 	PRECOND(root != NULL);
-	PRECOND(pid != NULL);
+	/* pid is optional */
 
 	syncretism_slash_strip(root);
 
