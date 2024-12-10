@@ -268,6 +268,13 @@ server_client_handle(struct conn *c, char *root)
 
 	syncretism_file_done(c);
 
+	TAILQ_FOREACH(file, &theirs, list) {
+		syncretism_signal_check();
+		syncretism_file_entry_send(c, file);
+	}
+
+	syncretism_file_done(c);
+
 	syncretism_file_list_free(&ours);
 	syncretism_file_list_free(&theirs);
 	syncretism_file_list_free(&update);

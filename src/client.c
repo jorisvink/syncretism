@@ -35,7 +35,10 @@ static void	client_send_files(struct conn *, const char *);
 static void	client_recv_files(struct conn *, const char *);
 
 /* How many files we received. */
-static u_int64_t	file_count = 0;
+static u_int64_t	file_update = 0;
+
+/* How many files we have removed. */
+static u_int64_t	file_remove = 0;
 
 /*
  * Perform the syncretism as the client.
@@ -91,7 +94,12 @@ syncretism_client(const char *ip, u_int16_t port, char *remote, char *local)
 	nyfe_zeroize(&client, sizeof(client));
 
 	printf("syncretism ritual complete\n");
-	printf("   %" PRIu64 " created/updated files\n", file_count);
+
+	if (file_remove > 0)
+		printf("   %" PRIu64 " removed files\n", file_remove);
+
+	if (file_update > 0)
+		printf("   %" PRIu64 " created/updated files\n", file_update);
 }
 
 /*
@@ -158,7 +166,8 @@ client_send_files(struct conn *c, const char *remote)
 }
 
 /*
- * Receive files from the server that we shall store.
+ * Receive files from the server that we shall store and the files we
+ * shall delete from our local copy.
  */
 static void
 client_recv_files(struct conn *c, const char *local)
@@ -174,12 +183,30 @@ client_recv_files(struct conn *c, const char *local)
 		if ((path = syncretism_file_entry_recv(c, &ent)) == NULL)
 			break;
 
-		file_count++;
+		file_update++;
 
 		syncretism_file_recv(c, path, &ent);
 		syncretism_log(LOG_NOTICE,
-		    "%s/%s (%" PRIu64 ")", local, path, ent.size);
+		    "U %s/%s (%" PRIu64 ")", local, path, ent.size);
 
+		free(path);
+	}
+
+	for (;;) {
+		syncretism_signal_check();
+
+		if ((path = syncretism_file_entry_recv(c, &ent)) == NULL)
+			break;
+
+		if (unlink(path) == -1) {
+			syncretism_log(LOG_NOTICE,
+			    "warning: failed to remove '%s' (%s)",
+			    path, strerror(errno));
+		}
+
+		file_remove++;
+
+		syncretism_log(LOG_NOTICE, "R %s/%s", local, path);
 		free(path);
 	}
 }
