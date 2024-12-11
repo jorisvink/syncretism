@@ -47,7 +47,8 @@ serving /home/cathedral to all clients:
 ## Protocol
 
 The protocol runs over TCP and establishes a secure channel
-in the following way:
+in the following way, note its security depends on keeping
+the shared_secret .. a secret:
 
 ```
 Client                                        Server
