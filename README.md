@@ -115,4 +115,6 @@ as messages using the CreateMsg() pseudo-code described above.
 
 5) The server sends the missing or updated files to the client.
 
-6) Both parties are now happy.
+6) The server tells the client what files can be removed.
+
+7) Both parties are now happy.
