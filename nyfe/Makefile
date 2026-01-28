@@ -29,6 +29,7 @@ SRC=	src/agelas.c \
 	src/mem.c \
 	src/passphrase.c \
 	src/sha3.c \
+	src/utils.c \
 	src/random.c
 
 OBJS=	$(SRC:src/%.c=$(OBJDIR)/%.o)
