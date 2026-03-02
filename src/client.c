@@ -28,9 +28,11 @@
 
 #include "syncretism.h"
 
-static void	client_send_auth(struct conn *);
 static void	client_send_random(struct conn *);
 static void	client_recv_random(struct conn *);
+static void	client_send_challenge(struct conn *);
+static void	client_handshake_init(struct conn *);
+static void	client_handshake_final(struct conn *);
 static void	client_send_files(struct conn *, const char *);
 static void	client_recv_files(struct conn *, const char *);
 
@@ -53,6 +55,8 @@ syncretism_client(const char *ip, u_int16_t port, char *remote, char *local)
 	PRECOND(port > 0);
 	PRECOND(remote != NULL);
 	PRECOND(local != NULL);
+
+	nyfe_mem_zero(&client, sizeof(client));
 
 	syncretism_slash_strip(local);
 	syncretism_slash_strip(remote);
@@ -81,13 +85,9 @@ syncretism_client(const char *ip, u_int16_t port, char *remote, char *local)
 
 	printf("syncretism %s:%u:%s -> %s\n", ip, port, remote, local);
 
-	client_send_random(&client);
-	client_recv_random(&client);
+	client_handshake_init(&client);
+	client_handshake_final(&client);
 
-	syncretism_derive_keys(&client, &client.tx, &client.rx,
-	    &client.tx_encap, &client.rx_encap);
-
-	client_send_auth(&client);
 	client_send_files(&client, remote);
 	client_recv_files(&client, local);
 
@@ -127,12 +127,64 @@ client_recv_random(struct conn *c)
 }
 
 /*
- * Encrypt the authentication token under the newly derived keys
+ * Perform the initial handshake and key derivation.
+ */
+static void
+client_handshake_init(struct conn *c)
+{
+	PRECOND(c != NULL);
+
+	client_send_random(c);
+	client_recv_random(c);
+
+	syncretism_derive_keys(c, &c->tx, &c->rx,
+	    &c->tx_encap, &c->rx_encap, SYNCRETISM_HANDSHAKE_INIT);
+
+	client_send_challenge(c);
+}
+
+/*
+ * Perform the final handshake and key derivation.
+ */
+static void
+client_handshake_final(struct conn *c)
+{
+	struct msg	*msg;
+	u_int8_t	sk[3168];
+	struct mlkem	*recv, send;
+
+	PRECOND(c != NULL);
+
+	nyfe_mem_zero(&send, sizeof(send));
+	nyfe_zeroize_register(sk, sizeof(sk));
+
+	pqcrystals_kyber1024_ref_keypair(send.pk_ct, sk);
+	nyfe_random_bytes(c->client_random, sizeof(c->client_random));
+	nyfe_memcpy(send.random, c->client_random, sizeof(c->client_random));
+
+	syncretism_msg_send(c, &send, sizeof(send));
+
+	msg = syncretism_msg_read(c);
+	if (msg->length != sizeof(*recv))
+		fatal("expected ml-kem-1024 exchange, got %zu", msg->length);
+
+	recv = (struct mlkem *)msg->data;
+	pqcrystals_kyber1024_ref_dec(c->kem_ss, recv->pk_ct, sk);
+	nyfe_zeroize(sk, sizeof(sk));
+
+	nyfe_memcpy(c->server_random, recv->random, sizeof(recv->random));
+
+	syncretism_derive_keys(c, &c->tx, &c->rx,
+	    &c->tx_encap, &c->rx_encap, SYNCRETISM_HANDSHAKE_FINAL);
+}
+
+/*
+ * Encrypt the challenge token under the newly derived keys
  * and send it to the server as initial proof that we hold the
  * same shared secret.
  */
 static void
-client_send_auth(struct conn *c)
+client_send_challenge(struct conn *c)
 {
 	PRECOND(c != NULL);
 

@@ -39,8 +39,11 @@ static int	server_wait_and_fork(int, char *);
 
 static void	server_send_random(struct conn *);
 static void	server_recv_random(struct conn *);
-static void	server_client_auth(struct conn *);
+static void	server_check_challenge(struct conn *);
 static void	server_perform_handshake(struct conn *);
+
+static void	server_handshake_init(struct conn *);
+static void	server_handshake_final(struct conn *);
 
 static void	server_client_handle(struct conn *, char *);
 
@@ -168,6 +171,7 @@ server_wait_and_fork(int fd, char *root)
 		/* Clears any pending signals from the parent. */
 		(void)syncretism_last_signal();
 
+		nyfe_mem_zero(&client, sizeof(client));
 		nyfe_zeroize_register(&client, sizeof(client));
 
 		client.fd = cfd;
@@ -290,11 +294,8 @@ server_perform_handshake(struct conn *c)
 
 	PRECOND(c != NULL);
 
-	server_recv_random(c);
-	server_send_random(c);
-
-	syncretism_derive_keys(c, &c->rx, &c->tx, &c->rx_encap, &c->tx_encap);
-	server_client_auth(c);
+	server_handshake_init(c);
+	server_handshake_final(c);
 
 	/* client is now fully authed and we are on a secure channel. */
 	tv.tv_sec = 60;
@@ -331,11 +332,67 @@ server_send_random(struct conn *c)
 }
 
 /*
- * Authenticate the client by verifying and decrypting the first
- * packet it sent us and making sure it contains our challenge.
+ * Perform the initial handshake, where we use random values from
+ * our client and ourselves to derive some initial keys based on
+ * our shared secret.
  */
 static void
-server_client_auth(struct conn *c)
+server_handshake_init(struct conn *c)
+{
+	PRECOND(c != NULL);
+
+	server_recv_random(c);
+	server_send_random(c);
+
+	syncretism_derive_keys(c, &c->rx, &c->tx,
+	    &c->rx_encap, &c->tx_encap, SYNCRETISM_HANDSHAKE_INIT);
+
+	server_check_challenge(c);
+}
+
+/*
+ * Perform ML-KEM-1024 exchange with our client.
+ *
+ * This is done after the initial handshake, over an encrypted link based
+ * on the shared secret and some random values. Therefor we use the msg
+ * api to send and receive messages here.
+ *
+ * Once we have performed the ML-KEM-1024 exchange we derive new fresh
+ * keys for the connection.
+ */
+static void
+server_handshake_final(struct conn *c)
+{
+	struct msg	*msg;
+	struct mlkem	*recv, send;
+
+	PRECOND(c != NULL);
+
+	nyfe_mem_zero(&send, sizeof(send));
+
+	msg = syncretism_msg_read(c);
+	if (msg->length != sizeof(*recv))
+		fatal("expected ml-kem-1024 exchange, got %zu", msg->length);
+
+	recv = (struct mlkem *)msg->data;
+	pqcrystals_kyber1024_ref_enc(send.pk_ct, c->kem_ss, recv->pk_ct);
+	nyfe_memcpy(c->client_random, recv->random, sizeof(recv->random));
+
+	nyfe_random_bytes(c->server_random, sizeof(c->server_random));
+	nyfe_memcpy(send.random, c->server_random, sizeof(c->server_random));
+
+	syncretism_msg_send(c, &send, sizeof(send));
+
+	syncretism_derive_keys(c, &c->rx, &c->tx,
+	    &c->rx_encap, &c->tx_encap, SYNCRETISM_HANDSHAKE_FINAL);
+}
+
+/*
+ * Check the client challenge by decrypting the first packet and
+ * making sure it contained our challenge.
+ */
+static void
+server_check_challenge(struct conn *c)
 {
 	struct msg	 *msg;
 
@@ -351,7 +408,7 @@ server_client_auth(struct conn *c)
 
 	syncretism_msg_free(msg);
 
-	syncretism_log(LOG_INFO, "client authenticated");
+	syncretism_log(LOG_INFO, "client verified challenge");
 }
 
 /*

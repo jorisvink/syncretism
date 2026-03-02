@@ -90,6 +90,21 @@ struct key {
 };
 
 /*
+ * The labels used for KMAC256() when deriving keys in each of
+ * the two different handshake steps.
+ */
+#define SYNCRETISM_HANDSHAKE_INIT	"SYNCRETISM.HANDSHAKE.INIT.KDF"
+#define SYNCRETISM_HANDSHAKE_FINAL	"SYNCRETISM.HANDSHAKE.FINAL.KDF"
+
+/*
+ * Data structure used when performing ML-KEM-1024 exchange.
+ */
+struct mlkem {
+	u_int8_t	random[32];
+	u_int8_t	pk_ct[1568];
+} __attribute__((packed));
+
+/*
  * Client or server connection state.
  */
 struct conn {
@@ -102,6 +117,7 @@ struct conn {
 	struct nyfe_agelas	tx_encap;
 
 	u_int8_t		token[64];
+	u_int8_t		kem_ss[32];
 	u_int8_t		client_random[32];
 	u_int8_t		server_random[32];
 };
@@ -123,6 +139,12 @@ struct msg {
 	u_int8_t	*data;
 };
 
+/* mlkem1024 ref */
+int	pqcrystals_kyber1024_ref_keypair(u_int8_t *, u_int8_t *);
+int	pqcrystals_kyber1024_ref_enc(u_int8_t *, u_int8_t *, const u_int8_t *);
+int	pqcrystals_kyber1024_ref_dec(u_int8_t *, const u_int8_t *,
+	    const u_int8_t *);
+
 /* src/syncretism.c */
 int	syncretism_last_signal(void);
 void	syncretism_signal_check(void);
@@ -134,7 +156,7 @@ void	syncretism_log(int, const char *, ...);
 void	syncretism_write(int, const void *, size_t);
 void	syncretism_logv(int, const char *, va_list);
 void	syncretism_derive_keys(struct conn *, struct key *, struct key *,
-	    struct nyfe_agelas *, struct nyfe_agelas *);
+	    struct nyfe_agelas *, struct nyfe_agelas *, const char *);
 
 /* src/client.c */
 void	syncretism_client(const char *, u_int16_t, char *, char *);

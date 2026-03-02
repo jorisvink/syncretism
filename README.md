@@ -11,7 +11,7 @@ Haven't you heard of rsync? Yup and I've used it for around 20 years,
 but I had a use-case for this which finally gave me an excuse to
 shut up and hack.
 
-What about the cryptography used here? All of it is based Keccak-f, including
+What about the cryptography used here? Most of it is based Keccak-f, including
 the AEAD cipher used (Agelas from Nyfe). It's probably a little broken
 and you shouldn't use it.
 
@@ -53,18 +53,19 @@ the shared_secret .. a secret:
 ```
 Client                                        Server
 
-32-byte random value      ------>
-  (client_random)         <------       32-byte random value
-                                           (server_random)
-                          <------       64-byte random token
-                                              (s_token)
+32-byte random value  ------>
+  (client_random)     <------       32-byte random value
+                                       (server_random)
+                      <------       64-byte random token
+                                          (s_token)
 
-                    Derive key material
+                    Derive initial key material
 
-           random = server_random || client_random
+           kem_ss = 00..
+           x = kem_ss || server_random || client_random
 
-           s_key, c_key, s_encap, c_encap =
-                 KMAC256(shared_secret, "SYNCRETISM.KDF", 0x100 || random)
+           s_key, c_key, s_encap, c_encap = KMAC256(shared_secret,
+               "SYNCRETISM.HANDSHAKE.INIT.KDF", 0x100 || x)
 
            s_key = server sending key
            c_key = client sending key
@@ -72,8 +73,33 @@ Client                                        Server
            s_encap = server length encryption key
            c_encap = client length encryption key
 
-   proof-of-key       ------>   accept or deny proof-of-key
+challenge-response    ------>   accept or deny proof-of-key
  CreateMsg(s_token)
+
+kex.pk = ML-KEM-1024 public key
+kex.random = 32-byte random value
+
+  CreateMsg(kex)      ------>   kex.ct, kem_ss = ML-KEM-1024-ENCAP(kex.pk)
+                                client_random = kex.random
+                                server_random = 32-byte random value
+                                kex.random = server_random
+
+kem_ss =              <------   CreateMsg(kex)
+ ML-KEM-1024_DECAP(kex.ct)
+
+                    Derive final key material
+
+           x = kem_ss || server_random || client_random
+
+           s_key, c_key, s_encap, c_encap = KMAC256(shared_secret,
+               "SYNCRETISM.HANDSHAKE.FINAL.KDF", 0x100 || x)
+
+           s_key = server sending key
+           c_key = client sending key
+
+           s_encap = server length encryption key
+           c_encap = client length encryption key
+
 
      msg              <----->             msg
  CreateMsg(..)                        CreateMsg(..)

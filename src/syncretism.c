@@ -23,9 +23,6 @@
 
 #include "syncretism.h"
 
-/* The label used for KMAC256() when deriving keys. */
-#define SYNCRETISM_LABEL		"SYNCRETISM.KDF"
-
 static void	signal_trap(int);
 static void	signal_hdlr(int);
 static void	signal_memfault(int);
@@ -190,7 +187,8 @@ main(int argc, char *argv[])
  */
 void
 syncretism_derive_keys(struct conn *c, struct key *rx, struct key *tx,
-    struct nyfe_agelas *rx_encap, struct nyfe_agelas *tx_encap)
+    struct nyfe_agelas *rx_encap, struct nyfe_agelas *tx_encap,
+    const char *label)
 {
 	int			fd;
 	struct nyfe_kmac256	kdf;
@@ -202,6 +200,7 @@ syncretism_derive_keys(struct conn *c, struct key *rx, struct key *tx,
 	PRECOND(tx != NULL);
 	PRECOND(rx_encap != NULL);
 	PRECOND(tx_encap != NULL);
+	PRECOND(label != NULL);
 
 	if ((fd = open(keypath,  O_RDONLY)) == -1)
 		fatal("failed to open syncretism key: %s", errno_s);
@@ -218,13 +217,13 @@ syncretism_derive_keys(struct conn *c, struct key *rx, struct key *tx,
 	nyfe_zeroize_register(okm, sizeof(okm));
 	nyfe_zeroize_register(&kdf, sizeof(kdf));
 
-	nyfe_kmac256_init(&kdf, ss, sizeof(ss),
-	    SYNCRETISM_LABEL, sizeof(SYNCRETISM_LABEL) - 1);
+	nyfe_kmac256_init(&kdf, ss, sizeof(ss), label, strlen(label));
 	nyfe_zeroize(ss, sizeof(ss));
 
 	len = htobe16(sizeof(okm));
 
 	nyfe_kmac256_update(&kdf, &len, sizeof(len));
+	nyfe_kmac256_update(&kdf, c->kem_ss, sizeof(c->kem_ss));
 	nyfe_kmac256_update(&kdf, c->server_random, sizeof(c->server_random));
 	nyfe_kmac256_update(&kdf, c->client_random, sizeof(c->client_random));
 	nyfe_kmac256_final(&kdf, okm, sizeof(okm));

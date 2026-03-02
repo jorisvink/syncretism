@@ -4,6 +4,8 @@ CC?=cc
 OBJDIR?=obj
 BIN=syncretism
 LIBNYFE=nyfe/libnyfe.a
+LIBMLKEM1024=mlkem1024/libmlkem1024.a
+
 VERSION=$(OBJDIR)/version.c
 
 DESTDIR?=
@@ -28,7 +30,7 @@ ifeq ("$(SANITIZE)", "1")
 	LDFLAGS+=-fsanitize=address,undefined
 endif
 
-LDFLAGS+=$(LIBNYFE)
+LDFLAGS+=$(LIBNYFE) $(LIBMLKEM1024)
 
 INSTALL_TARGETS=install-bin
 
@@ -44,7 +46,7 @@ OBJS+=	$(OBJDIR)/version.o
 
 all: $(BIN)
 
-$(BIN): $(OBJDIR) $(LIBNYFE) $(OBJS) $(VERSION)
+$(BIN): $(OBJDIR) $(LIBNYFE) $(LIBMLKEM1024) $(OBJS) $(VERSION)
 	$(CC) $(OBJS) $(LDFLAGS) -o $(BIN)
 
 $(VERSION): $(OBJDIR) force
@@ -73,6 +75,9 @@ install-bin: $(BIN)
 $(LIBNYFE):
 	$(MAKE) -C nyfe
 
+$(LIBMLKEM1024):
+	$(MAKE) -C mlkem1024
+
 src/syncretism.c: $(VERSION)
 
 $(OBJDIR):
@@ -84,6 +89,7 @@ $(OBJDIR)/%.o: src/%.c
 clean:
 	rm -f $(VERSION)
 	$(MAKE) -C nyfe clean
+	$(MAKE) -C mlkem1024 clean
 	rm -rf $(OBJDIR) $(BIN)
 
 .PHONY: all clean force
