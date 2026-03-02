@@ -30,9 +30,12 @@
 
 static void	client_send_random(struct conn *);
 static void	client_recv_random(struct conn *);
+
 static void	client_send_challenge(struct conn *);
+
 static void	client_handshake_init(struct conn *);
 static void	client_handshake_final(struct conn *);
+
 static void	client_send_files(struct conn *, const char *);
 static void	client_recv_files(struct conn *, const char *);
 
