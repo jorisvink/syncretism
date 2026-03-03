@@ -56,7 +56,7 @@ syncretism_file_list(struct file_list *list, int skip_checksum)
 
 	TAILQ_INIT(list);
 
-	fts = fts_open(pathv, FTS_NOCHDIR | FTS_LOGICAL | FTS_XDEV, file_cmp);
+	fts = fts_open(pathv, FTS_NOCHDIR | FTS_XDEV, file_cmp);
 	if (fts == NULL)
 		fatal("fts_open: %s", errno_s);
 
@@ -65,6 +65,12 @@ syncretism_file_list(struct file_list *list, int skip_checksum)
 
 		if (S_ISDIR(ent->fts_statp->st_mode))
 			continue;
+
+		if (!S_ISREG(ent->fts_statp->st_mode)) {
+			syncretism_log(LOG_NOTICE,
+			    "ignoring non-regular file '%s'", ent->fts_accpath);
+			continue;
+		}
 
 		if ((file = calloc(1, sizeof(*file))) == NULL)
 			fatal("calloc failed");
@@ -294,7 +300,7 @@ syncretism_file_send(struct conn *c, struct file *file)
 
 	buf = NULL;
 
-	if ((fd = open(file->path, O_RDONLY)) == -1)
+	if ((fd = open(file->path, O_RDONLY | O_NOFOLLOW)) == -1)
 		fatal("failed to open %s: %s", file->path, errno_s);
 
 	if (fstat(fd, &st) == -1)
