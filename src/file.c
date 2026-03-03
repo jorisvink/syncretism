@@ -152,9 +152,13 @@ syncretism_file_list_diff(struct file_list *ours, struct file_list *theirs,
 	 *	- Remaining entries in ours need updating.
 	 */
 	for (a = TAILQ_FIRST(theirs); a != NULL; a = an) {
+		syncretism_signal_check();
+
 		an = TAILQ_NEXT(a, list);
 
 		for (b = TAILQ_FIRST(ours); b != NULL; b = bn) {
+			syncretism_signal_check();
+
 			bn = TAILQ_NEXT(b, list);
 
 			if (strcmp(a->path, b->path))
@@ -300,6 +304,8 @@ syncretism_file_send(struct conn *c, struct file *file)
 	syncretism_file_entry_send(c, file);
 
 	while (st.st_size != 0) {
+		syncretism_signal_check();
+
 		toread = MIN(st.st_size, SYNCRETISM_MAX_MSG_LEN);
 
 		syncretism_read(fd, buf, toread);
@@ -353,6 +359,8 @@ syncretism_file_recv(struct conn *c, char *path, struct file_entry *ent)
 	remain = ent->size;
 
 	while (remain != 0) {
+		syncretism_signal_check();
+
 		msg = syncretism_msg_read(c);
 
 		if (msg->length > remain) {
@@ -394,9 +402,12 @@ file_sha3sum(struct file *file)
 	int			fd;
 	ssize_t			ret;
 	struct nyfe_sha3	ctx;
-	u_int8_t		buf[512];
+	u_int8_t		*buf;
 
 	PRECOND(file != NULL);
+
+	if ((buf = calloc(1, 1024 * 1024 * 8)) == NULL)
+		fatal("calloc failed");
 
 	if ((fd = open(file->path, O_RDONLY)) == -1)
 		fatal("failed to open '%s' (%s)", file->path, errno_s);
@@ -404,6 +415,8 @@ file_sha3sum(struct file *file)
 	nyfe_sha3_init256(&ctx);
 
 	for (;;) {
+		syncretism_signal_check();
+
 		if ((ret = read(fd, buf, sizeof(buf))) == -1) {
 			if (errno == EINTR)
 				continue;
@@ -419,6 +432,7 @@ file_sha3sum(struct file *file)
 	(void)close(fd);
 
 	nyfe_sha3_final(&ctx, file->entry.digest, sizeof(file->entry.digest));
+	free(buf);
 }
 
 /*
