@@ -73,7 +73,7 @@ syncretism_file_list(struct file_list *list, int skip_checksum)
 		if ((file->path = strdup(ent->fts_accpath + 2)) == NULL)
 			fatal("strdup failed");
 
-		if (skip_checksum)
+		if (skip_checksum == 0)
 			file_sha3sum(file);
 
 		file->entry.mode = ent->fts_statp->st_mode;
