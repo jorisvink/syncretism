@@ -40,7 +40,7 @@ static int	file_cmp(const FTSENT **, const FTSENT **);
  * Create a list of all files under the parent working directory (".").
  */
 void
-syncretism_file_list(struct file_list *list)
+syncretism_file_list(struct file_list *list, int skip_checksum)
 {
 	FTS			*fts;
 	FTSENT			*ent;
@@ -49,6 +49,7 @@ syncretism_file_list(struct file_list *list)
 
 	PRECOND(list != NULL);
 	PRECOND(pathv != NULL);
+	PRECOND(skip_checksum == 0 || skip_checksum == 1);
 
 	pathv[0] = ".";
 	pathv[1] = NULL;
@@ -72,7 +73,8 @@ syncretism_file_list(struct file_list *list)
 		if ((file->path = strdup(ent->fts_accpath + 2)) == NULL)
 			fatal("strdup failed");
 
-		file_sha3sum(file);
+		if (skip_checksum)
+			file_sha3sum(file);
 
 		file->entry.mode = ent->fts_statp->st_mode;
 		file->entry.size = ent->fts_statp->st_size;

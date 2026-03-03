@@ -257,7 +257,12 @@ server_client_handle(struct conn *c, char *root)
 		free(path);
 	}
 
-	syncretism_file_list(&ours);
+	if (TAILQ_EMPTY(&theirs)) {
+		syncretism_file_list(&ours, 1);
+	} else {
+		syncretism_file_list(&ours, 0);
+	}
+
 	syncretism_file_list_diff(&ours, &theirs, &update);
 
 	TAILQ_FOREACH(file, &ours, list) {

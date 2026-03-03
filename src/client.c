@@ -207,7 +207,7 @@ client_send_files(struct conn *c, const char *remote)
 	PRECOND(c != NULL);
 
 	syncretism_msg_send(c, remote, strlen(remote));
-	syncretism_file_list(&files);
+	syncretism_file_list(&files, 0);
 
 	TAILQ_FOREACH(file, &files, list) {
 		syncretism_signal_check();
