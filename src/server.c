@@ -209,6 +209,9 @@ server_reap_children(void)
 			fatal("waitpid: %s", errno_s);
 		}
 
+		if (pid == 0)
+			break;
+
 		syncretism_log(LOG_INFO,
 		    "child %d exited with %d", pid, status);
 	}
