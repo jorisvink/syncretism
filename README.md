@@ -127,17 +127,17 @@ Once the secure channel is established all communication is sent
 as messages using the CreateMsg() pseudo-code described above.
 
 1) The client now creates a list of all files under its local directory.
-   For each file it will calculate a SHA3-256 digest over the file.
 
 2) The client sends all file information to the server side so that
    the server knows the state of the client its local directory.
 
 3) The server now creates a list of all files under its directory.
-   For each file it will calculate a SHA3-256 digest over the file.
 
 4) The server creates a list of files that must be sent to the client
-   by looking at what files are missing or which files their SHA3-256
-   digest mismatches.
+   by looking at what files are missing or which files its mtime timestamps
+   differ. We only care about mtime, if it changed but the contents was the
+   still the same, the file gets transferred. I can live with that for my
+   use case.
 
 5) The server sends the missing or updated files to the client.
 

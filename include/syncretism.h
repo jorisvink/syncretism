@@ -67,7 +67,6 @@ struct file_entry {
 	u_int64_t		size;
 	u_int64_t		mtime;
 	u_int64_t		mode;
-	u_int8_t		digest[32];
 } __attribute__((packed));
 
 /*
@@ -163,7 +162,7 @@ void	syncretism_client(const char *, u_int16_t, char *, char *);
 
 /* src/file.c */
 void	syncretism_file_done(struct conn *);
-void	syncretism_file_list(struct file_list *, int);
+void	syncretism_file_list(struct file_list *);
 void	syncretism_file_list_free(struct file_list *);
 void	syncretism_file_send(struct conn *, struct file *);
 void	syncretism_file_save(char *, const void *, size_t);

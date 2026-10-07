@@ -33,14 +33,13 @@
 
 #include "syncretism.h"
 
-static void	file_sha3sum(struct file *);
 static int	file_cmp(const FTSENT **, const FTSENT **);
 
 /*
  * Create a list of all files under the parent working directory (".").
  */
 void
-syncretism_file_list(struct file_list *list, int skip_checksum)
+syncretism_file_list(struct file_list *list)
 {
 	FTS			*fts;
 	FTSENT			*ent;
@@ -49,7 +48,6 @@ syncretism_file_list(struct file_list *list, int skip_checksum)
 
 	PRECOND(list != NULL);
 	PRECOND(pathv != NULL);
-	PRECOND(skip_checksum == 0 || skip_checksum == 1);
 
 	pathv[0] = ".";
 	pathv[1] = NULL;
@@ -78,9 +76,6 @@ syncretism_file_list(struct file_list *list, int skip_checksum)
 		/* XXX - are we sure its always ./ ? */
 		if ((file->path = strdup(ent->fts_accpath + 2)) == NULL)
 			fatal("strdup failed");
-
-		if (skip_checksum == 0)
-			file_sha3sum(file);
 
 		file->entry.mode = ent->fts_statp->st_mode;
 		file->entry.size = ent->fts_statp->st_size;
@@ -175,8 +170,7 @@ syncretism_file_list_diff(struct file_list *ours, struct file_list *theirs,
 			TAILQ_REMOVE(theirs, a, list);
 			TAILQ_REMOVE(ours, b, list);
 
-			if (nyfe_mem_cmp(a->entry.digest,
-			    b->entry.digest, sizeof(a->entry.digest))) {
+			if (a->entry.mtime != b->entry.mtime) {
 				TAILQ_INSERT_TAIL(update, b, list);
 			} else {
 				free(b->path);
@@ -222,9 +216,9 @@ syncretism_file_entry_send(struct conn *c, struct file *file)
 
 	memcpy(&ent, &file->entry, sizeof(ent));
 
-	ent.mode = htobe64(ent.mode);
-	ent.size = htobe64(ent.size);
-	ent.mtime = htobe64(ent.mtime);
+	ent.mode = htobe64(file->entry.mode);
+	ent.size = htobe64(file->entry.size);
+	ent.mtime = htobe64(file->entry.mtime);
 
 	syncretism_msg_send(c, file->path, strlen(file->path));
 	syncretism_msg_send(c, &ent, sizeof(ent));
@@ -399,48 +393,6 @@ syncretism_file_recv(struct conn *c, char *path, struct file_entry *ent)
 		fatal("rename %s to %s failed: %s", tmp, path, errno_s);
 
 	(void)close(fd);
-}
-
-/*
- * Given a file, calculate its SHA3-256 digest.
- */
-static void
-file_sha3sum(struct file *file)
-{
-	int			fd;
-	ssize_t			ret;
-	struct nyfe_sha3	ctx;
-	u_int8_t		*buf;
-
-	PRECOND(file != NULL);
-
-	if ((buf = calloc(1, 1024 * 1024 * 8)) == NULL)
-		fatal("calloc failed");
-
-	if ((fd = open(file->path, O_RDONLY)) == -1)
-		fatal("failed to open '%s' (%s)", file->path, errno_s);
-
-	nyfe_sha3_init256(&ctx);
-
-	for (;;) {
-		syncretism_signal_check();
-
-		if ((ret = read(fd, buf, sizeof(buf))) == -1) {
-			if (errno == EINTR)
-				continue;
-			fatal("failed to read '%s' (%s)", file->path, errno_s);
-		}
-
-		if (ret == 0)
-			break;
-
-		nyfe_sha3_update(&ctx, buf, ret);
-	}
-
-	(void)close(fd);
-
-	nyfe_sha3_final(&ctx, file->entry.digest, sizeof(file->entry.digest));
-	free(buf);
 }
 
 /*
